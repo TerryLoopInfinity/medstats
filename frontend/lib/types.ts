@@ -50,6 +50,7 @@ export type AnalysisMethod =
   | "linear_reg"
   | "linear_reg_adjusted"
   | "logistic_reg"
+  | "logistic_reg_adjusted"
   | "survival"
   | "cox_reg"
   | "psm"

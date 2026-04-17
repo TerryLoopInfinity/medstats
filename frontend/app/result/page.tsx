@@ -15,6 +15,7 @@ const METHOD_LABELS: Record<string, string> = {
   linear_reg:           "线性回归",
   linear_reg_adjusted:  "线性回归 — 控制混杂偏倚",
   logistic_reg:         "Logistic 回归分析",
+  logistic_reg_adjusted: "Logistic 回归 — 控制混杂偏倚",
 };
 
 export default function ResultPage() {
@@ -99,7 +100,11 @@ export default function ResultPage() {
           <ResultTable
             key={t.title}
             table={t}
-            highlightKeyword={result.method === "linear_reg_adjusted" ? "★" : undefined}
+            highlightKeyword={
+            result.method === "linear_reg_adjusted" || result.method === "logistic_reg_adjusted"
+              ? "★"
+              : undefined
+          }
           />
         ))}
       </section>
@@ -163,6 +168,9 @@ export default function ResultPage() {
                 </div>
               ))}
             </div>
+          ) : result.method === "logistic_reg_adjusted" ? (
+            /* Logistic 回归控制混杂：森林图全宽，条形图全宽 */
+            <LogisticRegAdjustedCharts charts={result.charts} />
           ) : (
             /* 其他方法（差异性分析、线性回归等）：两列并排 */
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -233,6 +241,45 @@ function LogisticRegCharts({ charts }: { charts: ChartResult[] }) {
         <div className="rounded-xl border border-border p-4">
           <EChartsRenderer option={calib.option} height={320} />
         </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Logistic 回归控制混杂图表布局
+// ─────────────────────────────────────────────────────────────────────────────
+
+function LogisticRegAdjustedCharts({ charts }: { charts: ChartResult[] }) {
+  const forestCharts = charts.filter((c) => c.chart_type === "forest_plot");
+  const barCharts = charts.filter((c) => c.chart_type === "bar");
+
+  return (
+    <div className="space-y-6">
+      {/* OR 森林图（模型对比 + 分层分析）全宽 */}
+      {forestCharts.map((chart, i) => (
+        <div key={i} className="rounded-xl border border-border p-4">
+          <ForestPlot
+            option={chart.option}
+            height={Math.max(320, ((chart.option.forestData as unknown[])?.length ?? 4) * 52 + 80)}
+          />
+        </div>
+      ))}
+      {/* AUC 条形图 + 协变量贡献图并排（如有两个）*/}
+      {barCharts.length === 2 ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {barCharts.map((chart, i) => (
+            <div key={i} className="rounded-xl border border-border p-4">
+              <EChartsRenderer option={chart.option} height={300} />
+            </div>
+          ))}
+        </div>
+      ) : (
+        barCharts.map((chart, i) => (
+          <div key={i} className="rounded-xl border border-border p-4">
+            <EChartsRenderer option={chart.option} height={320} />
+          </div>
+        ))
       )}
     </div>
   );

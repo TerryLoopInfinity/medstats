@@ -14,6 +14,7 @@ const METHODS: { value: AnalysisMethod; label: string; available: boolean }[] = 
   { value: "linear_reg",          label: "线性回归",               available: true  },
   { value: "linear_reg_adjusted", label: "线性回归控制混杂",         available: true  },
   { value: "logistic_reg",        label: "Logistic 回归",          available: true  },
+  { value: "logistic_reg_adjusted", label: "Logistic 回归控制混杂",   available: true  },
   { value: "survival",     label: "生存分析 & Cox 回归",    available: false },
   { value: "psm",          label: "倾向性评分匹配",         available: false },
   { value: "prediction",   label: "临床预测模型",           available: false },
@@ -66,6 +67,17 @@ export default function AnalyzePage() {
   const [lrLogCatVars, setLrLogCatVars] = useState<string[]>([]);
   const [lrLogRefCats, setLrLogRefCats] = useState<Record<string, string>>({});
   const [lrLogMode, setLrLogMode] = useState<"both" | "univariate" | "multivariate">("both");
+
+  // ── Logistic 回归控制混杂 params ──────────────────────────────
+  const [lrlaOutcome, setLrlaOutcome] = useState<string>("");
+  const [lrlaExposure, setLrlaExposure] = useState<string>("");
+  const [lrlaCovariates, setLrlaCovariates] = useState<string[]>([]);
+  const [lrlaCatVars, setLrlaCatVars] = useState<string[]>([]);
+  const [lrlaRefCats, setLrlaRefCats] = useState<Record<string, string>>({});
+  const [lrlaModel2Covs, setLrlaModel2Covs] = useState<string[]>([]);
+  const [lrlaStratifyVar, setLrlaStratifyVar] = useState<string>("");
+  const [lrlaInteractionVar, setLrlaInteractionVar] = useState<string>("");
+  const [lrlaMode, setLrlaMode] = useState<"both" | "crude" | "adjusted">("both");
 
   // ── 假设检验 params ────────────────────────────────────────────
   const [testType, setTestType] = useState<"normality" | "variance" | "chi2" | "onesample">("normality");
@@ -176,6 +188,20 @@ export default function AnalyzePage() {
         ref_categories: lrLogRefCats,
         mode: lrLogMode,
       };
+    } else if (method === "logistic_reg_adjusted") {
+      if (!lrlaOutcome) { setError("请选择因变量"); return; }
+      if (!lrlaExposure) { setError("请选择暴露变量"); return; }
+      params = {
+        outcome: lrlaOutcome,
+        exposure: lrlaExposure,
+        covariates: lrlaCovariates,
+        categorical_vars: lrlaCatVars,
+        ref_categories: lrlaRefCats,
+        mode: lrlaMode,
+        ...(lrlaModel2Covs.length > 0 ? { model2_covariates: lrlaModel2Covs } : {}),
+        ...(lrlaStratifyVar ? { stratify_var: lrlaStratifyVar } : {}),
+        ...(lrlaInteractionVar ? { interaction_var: lrlaInteractionVar } : {}),
+      };
     } else if (method === "hypothesis") {
       params = { test_type: testType };
       if (testType === "normality") {
@@ -218,6 +244,7 @@ export default function AnalyzePage() {
     if (method === "linear_reg") return !!lrOutcome && lrPredictors.length > 0;
     if (method === "linear_reg_adjusted") return !!lraOutcome && !!lraExposure;
     if (method === "logistic_reg") return !!lrLogOutcome && lrLogPredictors.length > 0;
+    if (method === "logistic_reg_adjusted") return !!lrlaOutcome && !!lrlaExposure;
     if (method === "hypothesis") {
       if (testType === "normality" || testType === "onesample") return hypoVars.length > 0;
       if (testType === "variance") return hypoVars.length > 0 && !!hypoGroupVar;
@@ -369,6 +396,45 @@ export default function AnalyzePage() {
           setRefCats={setLrLogRefCats}
           mode={lrLogMode}
           setMode={setLrLogMode}
+        />
+      ) : method === "logistic_reg_adjusted" ? (
+        <LogisticRegAdjustedConfig
+          upload={upload}
+          outcome={lrlaOutcome}
+          setOutcome={(v) => {
+            setLrlaOutcome(v);
+            setLrlaExposure((e) => e === v ? "" : e);
+            setLrlaCovariates((c) => c.filter((x) => x !== v));
+            setLrlaCatVars((c) => c.filter((x) => x !== v));
+            setLrlaModel2Covs((c) => c.filter((x) => x !== v));
+            setLrlaStratifyVar((s) => s === v ? "" : s);
+            setLrlaInteractionVar((i) => i === v ? "" : i);
+          }}
+          exposure={lrlaExposure}
+          setExposure={(v) => {
+            setLrlaExposure(v);
+            setLrlaCovariates((c) => c.filter((x) => x !== v));
+            setLrlaCatVars((c) => c.filter((x) => x !== v));
+            setLrlaModel2Covs((c) => c.filter((x) => x !== v));
+          }}
+          covariates={lrlaCovariates}
+          setCovariates={(covs) => {
+            setLrlaCovariates(covs);
+            setLrlaCatVars((c) => c.filter((x) => covs.includes(x)));
+            setLrlaModel2Covs((m2) => m2.filter((c) => covs.includes(c)));
+          }}
+          catVars={lrlaCatVars}
+          setCatVars={setLrlaCatVars}
+          refCats={lrlaRefCats}
+          setRefCats={setLrlaRefCats}
+          model2Covs={lrlaModel2Covs}
+          setModel2Covs={setLrlaModel2Covs}
+          stratifyVar={lrlaStratifyVar}
+          setStratifyVar={setLrlaStratifyVar}
+          interactionVar={lrlaInteractionVar}
+          setInteractionVar={setLrlaInteractionVar}
+          mode={lrlaMode}
+          setMode={setLrlaMode}
         />
       ) : method === "ttest" ? (
         <TTestConfig
@@ -1527,6 +1593,275 @@ function LogisticRegConfig({
               </span>
             </p>
           )}
+          <p>模式：<span className="font-medium text-foreground">{MODES.find((m) => m.value === mode)?.label}</span></p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Logistic 回归控制混杂配置组件
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface LogisticRegAdjustedConfigProps {
+  upload: UploadResponse;
+  outcome: string;
+  setOutcome: (v: string) => void;
+  exposure: string;
+  setExposure: (v: string) => void;
+  covariates: string[];
+  setCovariates: (v: string[]) => void;
+  catVars: string[];
+  setCatVars: React.Dispatch<React.SetStateAction<string[]>>;
+  refCats: Record<string, string>;
+  setRefCats: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  model2Covs: string[];
+  setModel2Covs: React.Dispatch<React.SetStateAction<string[]>>;
+  stratifyVar: string;
+  setStratifyVar: (v: string) => void;
+  interactionVar: string;
+  setInteractionVar: (v: string) => void;
+  mode: "both" | "crude" | "adjusted";
+  setMode: (v: "both" | "crude" | "adjusted") => void;
+}
+
+function LogisticRegAdjustedConfig({
+  upload,
+  outcome, setOutcome,
+  exposure, setExposure,
+  covariates, setCovariates,
+  catVars, setCatVars,
+  refCats, setRefCats,
+  model2Covs, setModel2Covs,
+  stratifyVar, setStratifyVar,
+  interactionVar, setInteractionVar,
+  mode, setMode,
+}: LogisticRegAdjustedConfigProps) {
+  const cols = upload.column_names;
+  const nonOutcome = cols.filter((c) => c !== outcome);
+  const nonExposureOrOutcome = cols.filter((c) => c !== outcome && c !== exposure);
+
+  const toggleCov = (col: string) =>
+    setCovariates(covariates.includes(col) ? covariates.filter((c) => c !== col) : [...covariates, col]);
+
+  const toggleCat = (col: string) => {
+    setCatVars((prev) => prev.includes(col) ? prev.filter((c) => c !== col) : [...prev, col]);
+    if (catVars.includes(col)) {
+      setRefCats((prev) => { const next = { ...prev }; delete next[col]; return next; });
+    }
+  };
+
+  const toggleModel2Cov = (col: string) =>
+    setModel2Covs((prev) => prev.includes(col) ? prev.filter((c) => c !== col) : [...prev, col]);
+
+  const getPreviewValues = (colName: string): string[] => {
+    const colIdx = upload.column_names.indexOf(colName);
+    if (colIdx === -1) return [];
+    const vals = new Set<string>();
+    for (const row of upload.preview) {
+      const v = row[colIdx];
+      if (v !== null && v !== undefined && v !== "") vals.add(String(v));
+    }
+    return Array.from(vals).sort();
+  };
+
+  const MODES = [
+    { value: "both"     as const, label: "粗模型 + 调整模型", desc: "输出 Model 1/2/3 逐步对比" },
+    { value: "crude"    as const, label: "仅粗模型",           desc: "不调整协变量" },
+    { value: "adjusted" as const, label: "仅调整模型",         desc: "仅输出全调整结果" },
+  ];
+
+  return (
+    <div className="space-y-6">
+      {/* ── 因变量 ── */}
+      <section className="space-y-3">
+        <div>
+          <h2 className="font-semibold">因变量（二分类结局）<span className="text-destructive text-xs font-normal ml-1">必选</span></h2>
+          <p className="text-xs text-muted-foreground mt-0.5">支持 0/1、True/False 或两个字符串类别</p>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+          {cols.map((col) => (
+            <label key={col} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${outcome === col ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"}`}>
+              <input type="radio" name="lrla_outcome" value={col} checked={outcome === col} onChange={() => setOutcome(col)} className="accent-primary" />
+              <span className="truncate" title={col}>{col}</span>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      {/* ── 暴露变量 ── */}
+      <section className="space-y-3">
+        <div>
+          <h2 className="font-semibold">暴露变量（主要研究自变量）<span className="text-destructive text-xs font-normal ml-1">必选</span></h2>
+          <p className="text-xs text-muted-foreground mt-0.5">数值型变量；OR 变化将被全程追踪</p>
+        </div>
+        {!outcome ? (
+          <p className="text-xs text-muted-foreground">请先选择因变量</p>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+            {nonOutcome.map((col) => (
+              <label key={col} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${exposure === col ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/20 font-medium" : "border-border hover:border-emerald-400/60"}`}>
+                <input type="radio" name="lrla_exposure" value={col} checked={exposure === col} onChange={() => setExposure(col)} className="accent-emerald-500" />
+                <span className="truncate" title={col}>{col}</span>
+              </label>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* ── 协变量 ── */}
+      <section className="space-y-3">
+        <div>
+          <h2 className="font-semibold">协变量（需控制的混杂因素）</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">可混合连续变量与分类变量；分类变量需在下方标记</p>
+        </div>
+        {!exposure ? (
+          <p className="text-xs text-muted-foreground">请先选择暴露变量</p>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+            {nonExposureOrOutcome.map((col) => (
+              <label key={col} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${covariates.includes(col) ? "border-amber-500 bg-amber-50 dark:bg-amber-950/20 font-medium" : "border-border hover:border-amber-400/60"}`}>
+                <input type="checkbox" checked={covariates.includes(col)} onChange={() => toggleCov(col)} className="accent-amber-500" />
+                <span className="truncate" title={col}>{col}</span>
+              </label>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* ── 分类变量标记 ── */}
+      {covariates.length > 0 && (
+        <section className="space-y-3">
+          <div>
+            <h2 className="font-semibold">分类变量标记</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">勾选后自动 dummy 编码；可选择参考组（默认取第一个类别）</p>
+          </div>
+          <div className="space-y-2">
+            {covariates.map((col) => {
+              const isCat = catVars.includes(col);
+              const previewVals = isCat ? getPreviewValues(col) : [];
+              return (
+                <div key={col} className={`flex flex-wrap items-center gap-3 px-4 py-3 rounded-lg border transition-colors ${isCat ? "border-amber-400 bg-amber-50 dark:bg-amber-950/20" : "border-border"}`}>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer min-w-[140px]">
+                    <input type="checkbox" checked={isCat} onChange={() => toggleCat(col)} className="accent-amber-500" />
+                    <span className="font-medium">{col}</span>
+                    {isCat && <span className="text-xs px-1.5 py-0.5 rounded bg-amber-200 dark:bg-amber-800 text-amber-800 dark:text-amber-200">分类</span>}
+                  </label>
+                  {isCat && previewVals.length > 0 && (
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="text-xs text-muted-foreground">参考组：</span>
+                      <select
+                        value={refCats[col] ?? previewVals[0]}
+                        onChange={(e) => setRefCats((prev) => ({ ...prev, [col]: e.target.value }))}
+                        className="text-sm px-2 py-1 border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary/30 bg-background"
+                      >
+                        {previewVals.map((v) => <option key={v} value={v}>{v}</option>)}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* ── Model 2 协变量（可选）── */}
+      {covariates.length >= 2 && (
+        <section className="space-y-3">
+          <div>
+            <h2 className="font-semibold">Model 2 协变量（可选）</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">从协变量中选择进入 Model 2（部分调整）；留空则自动取前一半</p>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+            {covariates.map((col) => (
+              <label key={col} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${model2Covs.includes(col) ? "border-violet-500 bg-violet-50 dark:bg-violet-950/20 font-medium" : "border-border hover:border-violet-400/60"}`}>
+                <input type="checkbox" checked={model2Covs.includes(col)} onChange={() => toggleModel2Cov(col)} className="accent-violet-500" />
+                <span className="truncate" title={col}>{col}</span>
+              </label>
+            ))}
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            <span className="text-xs px-2 py-1 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">
+              Model 2：{model2Covs.length > 0 ? model2Covs.join("、") : "自动（前一半）"}
+            </span>
+            <span className="text-xs px-2 py-1 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">
+              Model 3（全调整）：{covariates.join("、")}
+            </span>
+          </div>
+        </section>
+      )}
+
+      {/* ── 分层变量 ── */}
+      <section className="space-y-3">
+        <div>
+          <h2 className="font-semibold">分层变量（可选）</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">按各水平分别拟合模型，输出各层 OR + Breslow-Day 同质性检验</p>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+          <label className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${!stratifyVar ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"}`}>
+            <input type="radio" name="lrla_stratify" value="" checked={!stratifyVar} onChange={() => setStratifyVar("")} className="accent-primary" />
+            <span className="text-muted-foreground">不分层</span>
+          </label>
+          {cols.filter((c) => c !== outcome && c !== exposure).map((col) => (
+            <label key={col} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${stratifyVar === col ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"}`}>
+              <input type="radio" name="lrla_stratify" value={col} checked={stratifyVar === col} onChange={() => setStratifyVar(col)} className="accent-primary" />
+              <span className="truncate" title={col}>{col}</span>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      {/* ── 交互项变量 ── */}
+      <section className="space-y-3">
+        <div>
+          <h2 className="font-semibold">交互项变量（可选）</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">检验 暴露 × 该变量 的交互效应（效应修饰），输出交互 OR 和 p 值</p>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+          <label className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${!interactionVar ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"}`}>
+            <input type="radio" name="lrla_interaction" value="" checked={!interactionVar} onChange={() => setInteractionVar("")} className="accent-primary" />
+            <span className="text-muted-foreground">不检验</span>
+          </label>
+          {cols.filter((c) => c !== outcome).map((col) => (
+            <label key={col} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${interactionVar === col ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"}`}>
+              <input type="radio" name="lrla_interaction" value={col} checked={interactionVar === col} onChange={() => setInteractionVar(col)} className="accent-primary" />
+              <span className="truncate" title={col}>{col}</span>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      {/* ── 分析模式 ── */}
+      <section className="space-y-3">
+        <h2 className="font-semibold">分析模式</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          {MODES.map(({ value, label, desc }) => (
+            <label key={value} className={`flex items-start gap-3 px-4 py-3 rounded-lg border cursor-pointer transition-colors ${mode === value ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"}`}>
+              <input type="radio" name="lrla_mode" value={value} checked={mode === value} onChange={() => setMode(value)} className="accent-primary mt-0.5" />
+              <div>
+                <p className="text-sm font-medium">{label}</p>
+                <p className="text-xs text-muted-foreground">{desc}</p>
+              </div>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      {/* ── 配置摘要 ── */}
+      {outcome && exposure && (
+        <div className="rounded-lg bg-muted/40 border border-border px-4 py-3 text-xs text-muted-foreground space-y-1">
+          <p>因变量：<span className="font-medium text-foreground">{outcome}</span></p>
+          <p>暴露变量：<span className="font-medium text-emerald-600 dark:text-emerald-400">{exposure}</span></p>
+          {covariates.length > 0 && (
+            <p>协变量（{covariates.length}）：<span className="font-medium text-foreground">{covariates.join("、")}</span></p>
+          )}
+          {catVars.length > 0 && (
+            <p>分类变量：<span className="font-medium text-foreground">{catVars.map((v) => `${v}（参考：${refCats[v] ?? "默认"}）`).join("、")}</span></p>
+          )}
+          {stratifyVar && <p>分层变量：<span className="font-medium text-foreground">{stratifyVar}</span></p>}
+          {interactionVar && <p>交互项：<span className="font-medium text-foreground">{exposure} × {interactionVar}</span></p>}
           <p>模式：<span className="font-medium text-foreground">{MODES.find((m) => m.value === mode)?.label}</span></p>
         </div>
       )}
