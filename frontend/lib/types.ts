@@ -48,6 +48,7 @@ export type AnalysisMethod =
   | "hypothesis"
   | "correlation"
   | "linear_reg"
+  | "linear_reg_adjusted"
   | "logistic_reg"
   | "survival"
   | "cox_reg"
