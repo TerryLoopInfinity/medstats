@@ -28,6 +28,15 @@ logger = logging.getLogger(__name__)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 溢出安全的 exp
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _safe_exp(x: float) -> float:
+    """np.clip 防止 exp 溢出 (math range error)。"""
+    return float(np.exp(np.clip(float(x), -500.0, 500.0)))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 主入口
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -143,6 +152,7 @@ def run(df: pd.DataFrame, params: dict) -> AnalysisResult:
         except Exception as exc:
             raise ValueError(f"多变量 logistic 回归失败：{exc}") from exc
 
+        warnings.extend(multi_result.get("sep_warnings", []))
         tables.extend([
             TableResult(
                 title="多变量 Logistic 回归 — 回归系数",
@@ -365,9 +375,9 @@ def _univariate_analysis(
                 se = float(res.bse[idx])
                 wald = beta / se if se > 0 else float("nan")
                 p = float(res.pvalues[idx])
-                or_val = math.exp(beta)
-                or_lo = math.exp(float(ci_arr[idx, 0]))
-                or_hi = math.exp(float(ci_arr[idx, 1]))
+                or_val = _safe_exp(beta)
+                or_lo = _safe_exp(float(ci_arr[idx, 0]))
+                or_hi = _safe_exp(float(ci_arr[idx, 1]))
                 level = dc[len(pred) + 1:]
                 rows.append([
                     f"  {level}",
@@ -400,11 +410,11 @@ def _univariate_analysis(
             se = float(res.bse[1])
             wald = beta / se if se > 0 else float("nan")
             p = float(res.pvalues[1])
-            or_val = math.exp(beta)
-            or_lo = math.exp(float(ci_arr[1, 0]))
-            or_hi = math.exp(float(ci_arr[1, 1]))
+            or_val = _safe_exp(beta)
+            or_lo = _safe_exp(float(ci_arr[1, 0]))
+            or_hi = _safe_exp(float(ci_arr[1, 1]))
             sd = float(np.std(x, ddof=1)) or 1.0
-            or_std = math.exp(beta * sd)
+            or_std = _safe_exp(beta * sd)
             rows.append([
                 pred,
                 f"{beta:.4f}", f"{se:.4f}", f"{wald:.3f}",
@@ -467,9 +477,9 @@ def _multivariate_analysis(
                 se = float(model_fit.bse[idx])
                 wald = beta / se if se > 0 else float("nan")
                 p = float(model_fit.pvalues[idx])
-                or_val = math.exp(beta)
-                or_lo = math.exp(float(ci_arr[idx, 0]))
-                or_hi = math.exp(float(ci_arr[idx, 1]))
+                or_val = _safe_exp(beta)
+                or_lo = _safe_exp(float(ci_arr[idx, 0]))
+                or_hi = _safe_exp(float(ci_arr[idx, 1]))
                 level = dc[len(orig) + 1:]
                 coef_rows.append([
                     f"  {level}",
@@ -489,10 +499,10 @@ def _multivariate_analysis(
             se = float(model_fit.bse[idx])
             wald = beta / se if se > 0 else float("nan")
             p = float(model_fit.pvalues[idx])
-            or_val = math.exp(beta)
-            or_lo = math.exp(float(ci_arr[idx, 0]))
-            or_hi = math.exp(float(ci_arr[idx, 1]))
-            or_std = math.exp(beta * col_sds[orig])
+            or_val = _safe_exp(beta)
+            or_lo = _safe_exp(float(ci_arr[idx, 0]))
+            or_hi = _safe_exp(float(ci_arr[idx, 1]))
+            or_std = _safe_exp(beta * col_sds[orig])
             coef_rows.append([
                 orig,
                 f"{beta:.4f}", f"{se:.4f}", f"{wald:.3f}",
@@ -510,8 +520,8 @@ def _multivariate_analysis(
     k = len(all_cols)
 
     mcfadden = 1.0 - llf / llnull if llnull != 0 else float("nan")
-    cox_snell = 1.0 - math.exp(2.0 / n * (llnull - llf))
-    nag_max = 1.0 - math.exp(2.0 * llnull / n)
+    cox_snell = 1.0 - _safe_exp(2.0 / n * (llnull - llf))
+    nag_max = 1.0 - _safe_exp(2.0 * llnull / n)
     nagelkerke = cox_snell / nag_max if nag_max > 0 else float("nan")
     lr_stat = 2.0 * (llf - llnull)
     lr_p = float(stats.chi2.sf(lr_stat, k))
@@ -568,6 +578,17 @@ def _multivariate_analysis(
         ["实际阳性 (1)", str(int(fn)), str(int(tp))],
     ]
 
+    # ── 完全分离检测 ──────────────────────────────────────────────────────────
+    sep_warnings: list[str] = []
+    for i, col in enumerate(all_cols):
+        b = float(model_fit.params[i + 1])
+        s = float(model_fit.bse[i + 1])
+        if abs(b) > 10 or s > 100:
+            sep_warnings.append(
+                f"变量 '{col}' 可能存在完全分离，OR 估计不可靠"
+                f"（β = {b:.2f}，SE = {s:.2f}）"
+            )
+
     # ── VIF ──────────────────────────────────────────────────────────────────
     vif_rows: list[list[Any]] = []
     if len(all_cols) > 1:
@@ -598,6 +619,7 @@ def _multivariate_analysis(
         "best_threshold": best_thr,
         "roc_tuple": (fpr_arr, tpr_arr, thr_arr, auc, auc_lo, auc_hi, best_fpr, best_tpr, best_thr),
         "coef_data_for_forest": coef_data_for_forest,
+        "sep_warnings": sep_warnings,
     }
 
 

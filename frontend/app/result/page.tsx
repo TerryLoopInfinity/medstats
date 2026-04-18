@@ -6,6 +6,10 @@ import { EChartsRenderer } from "@/components/charts/EChartsRenderer";
 import { ForestPlot } from "@/components/charts/ForestPlot";
 import type { AnalysisResult, ChartResult, TableResult } from "@/lib/types";
 
+// ── 生存分析 / Cox 回归需要可折叠生存表和 PH 警告行，扩展 props ──
+type CollapsibleTableProps = { table: TableResult; defaultOpen?: boolean; highlightKeyword?: string };
+type SurvivalResultProps = { result: AnalysisResult };
+
 const METHOD_LABELS: Record<string, string> = {
   descriptive:          "统计描述 & 正态性检验",
   table_one:            "三线表生成",
@@ -16,6 +20,8 @@ const METHOD_LABELS: Record<string, string> = {
   linear_reg_adjusted:  "线性回归 — 控制混杂偏倚",
   logistic_reg:         "Logistic 回归分析",
   logistic_reg_adjusted: "Logistic 回归 — 控制混杂偏倚",
+  survival:             "生存分析（Kaplan-Meier）",
+  cox_reg:              "Cox 比例风险回归",
 };
 
 export default function ResultPage() {
@@ -96,17 +102,20 @@ export default function ResultPage() {
 
       {/* Tables */}
       <section className="space-y-6">
-        {result.tables.map((t) => (
-          <ResultTable
-            key={t.title}
-            table={t}
-            highlightKeyword={
-            result.method === "linear_reg_adjusted" || result.method === "logistic_reg_adjusted"
-              ? "★"
-              : undefined
-          }
-          />
-        ))}
+        {(result.method === "survival" || result.method === "cox_reg")
+          ? <SurvivalCoxTables result={result} />
+          : result.tables.map((t) => (
+              <ResultTable
+                key={t.title}
+                table={t}
+                highlightKeyword={
+                  result.method === "linear_reg_adjusted" || result.method === "logistic_reg_adjusted"
+                    ? "★"
+                    : undefined
+                }
+              />
+            ))
+        }
       </section>
 
       {/* Charts */}
@@ -171,6 +180,12 @@ export default function ResultPage() {
           ) : result.method === "logistic_reg_adjusted" ? (
             /* Logistic 回归控制混杂：森林图全宽，条形图全宽 */
             <LogisticRegAdjustedCharts charts={result.charts} />
+          ) : result.method === "survival" ? (
+            /* 生存分析：KM 曲线全宽，累积风险图全宽 */
+            <SurvivalCharts charts={result.charts} />
+          ) : result.method === "cox_reg" ? (
+            /* Cox 回归：HR 森林图全宽，其余两列 */
+            <CoxRegCharts charts={result.charts} />
           ) : (
             /* 其他方法（差异性分析、线性回归等）：两列并排 */
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -292,11 +307,18 @@ function LogisticRegAdjustedCharts({ charts }: { charts: ChartResult[] }) {
 function ResultTable({
   table,
   highlightKeyword,
+  phWarningCol,
+  pHighlightCol,
 }: {
   table: TableResult;
   highlightKeyword?: string;
+  /** 列名：该列值含 "⚠ 违反" 时整行标红（Cox PH 假设检验） */
+  phWarningCol?: string;
+  /** 列名：强制对该列进行 p 值着色（默认列名为 "p 值"） */
+  pHighlightCol?: string;
 }) {
-  const pValIdx = table.headers.indexOf("p 值");
+  const pValIdx = table.headers.indexOf(pHighlightCol ?? "p 值");
+  const phColIdx = phWarningCol ? table.headers.indexOf(phWarningCol) : -1;
 
   return (
     <div className="space-y-2">
@@ -338,11 +360,19 @@ function ResultTable({
                 typeof row[0] === "string" &&
                 String(row[0]).includes(highlightKeyword);
 
+              // PH 违反行（结论列含 "⚠ 违反"）
+              const isPHViolation =
+                phColIdx >= 0 &&
+                typeof row[phColIdx] === "string" &&
+                String(row[phColIdx]).includes("⚠");
+
               return (
                 <tr
                   key={i}
                   className={`border-b border-border last:border-0 transition-colors ${
-                    isHighlightRow
+                    isPHViolation
+                      ? "bg-destructive/5 border-l-2 border-l-destructive"
+                      : isHighlightRow
                       ? "bg-primary/5 border-l-2 border-l-primary"
                       : isCategoryHeader
                       ? "bg-muted/20"
@@ -453,3 +483,221 @@ function exportJson(result: AnalysisResult) {
   a.click();
   URL.revokeObjectURL(url);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 生存分析 / Cox 回归 — 表格区域
+// 生存表可折叠；PH 违反行高亮；Log-rank p 值高亮
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SurvivalCoxTables({ result }: SurvivalResultProps) {
+  const COLLAPSIBLE_KEYWORDS = ["生存表", "Life Table"];
+  const LOGRANK_KEYWORD = "Log-rank";
+  const PH_KEYWORD = "Schoenfeld";
+
+  return (
+    <div className="space-y-6">
+      {result.tables.map((t) => {
+        const isCollapsible = COLLAPSIBLE_KEYWORDS.some((k) => t.title.includes(k));
+        const isLogrank = t.title.includes(LOGRANK_KEYWORD);
+        const isPH = t.title.includes(PH_KEYWORD) || t.title.includes("比例风险");
+
+        if (isCollapsible) {
+          return <CollapsibleTable key={t.title} table={t} defaultOpen={false} />;
+        }
+        if (isLogrank) {
+          return (
+            <ResultTable
+              key={t.title}
+              table={t}
+              highlightKeyword="***"
+              pHighlightCol="p 值"
+            />
+          );
+        }
+        if (isPH) {
+          return (
+            <ResultTable
+              key={t.title}
+              table={t}
+              phWarningCol="结论"
+            />
+          );
+        }
+        return <ResultTable key={t.title} table={t} />;
+      })}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 可折叠表格
+// ─────────────────────────────────────────────────────────────────────────────
+
+function CollapsibleTable({ table, defaultOpen = false }: CollapsibleTableProps) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="flex items-center gap-2 text-lg font-semibold hover:text-primary transition-colors"
+        >
+          <span>{open ? "▾" : "▸"}</span>
+          <span>{table.title}</span>
+          {!open && (
+            <span className="text-xs font-normal text-muted-foreground ml-1">
+              ({table.rows.length} 行，点击展开)
+            </span>
+          )}
+        </button>
+        {open && (
+          <button
+            onClick={() => exportCsv(table)}
+            className="px-3 py-1 border border-border rounded-lg text-xs text-muted-foreground hover:bg-muted/50 transition-colors shrink-0"
+          >
+            导出 CSV
+          </button>
+        )}
+      </div>
+      {open && (
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/40">
+              <tr>
+                {table.headers.map((h) => (
+                  <th key={h} className="px-3 py-2.5 text-left font-semibold whitespace-nowrap border-b-2 border-border">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {table.rows.map((row, i) => (
+                <tr key={i} className="border-b border-border last:border-0 hover:bg-muted/20 transition-colors">
+                  {row.map((cell, j) => (
+                    <td key={j} className={`px-3 py-2 whitespace-nowrap text-sm ${j === 0 ? "font-medium" : "text-muted-foreground"}`}>
+                      {cell === null ? "—" : String(cell)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 生存分析图表布局
+// KM 曲线全宽（含 number at risk）；累积风险图全宽
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SurvivalCharts({ charts }: { charts: ChartResult[] }) {
+  const kmChart = charts.find((c) => c.chart_type === "kaplan_meier");
+  const otherCharts = charts.filter((c) => c.chart_type !== "kaplan_meier");
+
+  return (
+    <div className="space-y-6">
+      {/* KM 曲线全宽 */}
+      {kmChart && (
+        <div className="rounded-xl border border-border p-4 space-y-3">
+          <p className="text-sm font-semibold text-muted-foreground">{kmChart.title}</p>
+          <EChartsRenderer option={kmChart.option} height={420} />
+          {/* Number at risk 表 */}
+          <NumberAtRiskTable narData={kmChart.option.numberAtRisk as NarEntry[] | undefined} />
+        </div>
+      )}
+      {/* 其他图表（累积风险函数）全宽 */}
+      {otherCharts.map((chart, i) => (
+        <div key={i} className="rounded-xl border border-border p-4">
+          <EChartsRenderer option={chart.option} height={340} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+interface NarEntry {
+  group: string;
+  times: number[];
+  counts: number[];
+}
+
+function NumberAtRiskTable({ narData }: { narData?: NarEntry[] }) {
+  if (!narData || narData.length === 0) return null;
+  const times = narData[0].times;
+  return (
+    <div className="overflow-x-auto mt-2">
+      <table className="text-xs w-full border-t border-border">
+        <thead>
+          <tr>
+            <td className="pr-3 py-1 font-semibold text-muted-foreground whitespace-nowrap">Number at risk</td>
+            {times.map((t) => (
+              <td key={t} className="px-2 py-1 text-center text-muted-foreground">{Math.round(t)}</td>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {narData.map((row) => (
+            <tr key={row.group} className="border-t border-border/50">
+              <td className="pr-3 py-1 font-medium">{row.group}</td>
+              {row.counts.map((c, i) => (
+                <td key={i} className="px-2 py-1 text-center">{c}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cox 回归图表布局
+// HR 森林图全宽；调整后生存曲线全宽；Schoenfeld + log-log 并排
+// ─────────────────────────────────────────────────────────────────────────────
+
+function CoxRegCharts({ charts }: { charts: ChartResult[] }) {
+  const forestCharts = charts.filter((c) => c.chart_type === "forest_plot");
+  const lineCharts   = charts.filter((c) => c.chart_type === "line");
+  const scatterCharts = charts.filter((c) => c.chart_type === "scatter");
+
+  return (
+    <div className="space-y-6">
+      {/* HR 森林图全宽 */}
+      {forestCharts.map((chart, i) => (
+        <div key={i} className="rounded-xl border border-border p-4">
+          <ForestPlot
+            option={chart.option}
+            height={Math.max(320, ((chart.option.forestData as unknown[])?.length ?? 4) * 52 + 80)}
+          />
+        </div>
+      ))}
+      {/* 调整后生存曲线（line）全宽 */}
+      {lineCharts.map((chart, i) => (
+        <div key={i} className="rounded-xl border border-border p-4">
+          <EChartsRenderer option={chart.option} height={380} />
+        </div>
+      ))}
+      {/* Schoenfeld 残差 + log-log 并排 */}
+      {scatterCharts.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {scatterCharts.map((chart, i) => (
+            <div key={i} className="rounded-xl border border-border p-4">
+              <EChartsRenderer option={chart.option} height={300} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ResultTable 扩展：phWarningCol（PH 违反行标红）、pHighlightCol
+// ─────────────────────────────────────────────────────────────────────────────
+
+// 原 ResultTable 已支持 highlightKeyword，此处扩展两个新 prop 供生存/Cox 使用。
+// 通过在原组件入参上叠加即可，无需修改原组件。

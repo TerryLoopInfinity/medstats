@@ -38,6 +38,33 @@ logger = logging.getLogger(__name__)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 溢出安全的 exp / 完全分离检测
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _safe_exp(x: float) -> float:
+    """np.clip 防止 exp 溢出 (math range error)。"""
+    return float(np.exp(np.clip(float(x), -500.0, 500.0)))
+
+
+def _check_separation(model_result: dict, model_label: str = "") -> list[str]:
+    """检测完全分离：|β| > 10 或 SE > 100 时发出警告。"""
+    sep_warnings: list[str] = []
+    model = model_result["model"]
+    prefix = f"[{model_label}] " if model_label else ""
+    for name in model.params.index:
+        if name in ("const", "Intercept"):
+            continue
+        beta = float(model.params[name])
+        se = float(model.bse[name])
+        if abs(beta) > 10 or se > 100:
+            sep_warnings.append(
+                f"{prefix}变量 '{name}' 可能存在完全分离，OR 估计不可靠"
+                f"（β = {beta:.2f}，SE = {se:.2f}）"
+            )
+    return sep_warnings
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 主入口
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -161,6 +188,12 @@ def run(df: pd.DataFrame, params: dict) -> AnalysisResult:
         m2 = _fit_logit(df_main, [exposure] + m2_expanded)
 
     m3 = _fit_logit(df_main, [exposure] + m3_expanded)
+
+    # ─── 完全分离检测 ─────────────────────────────────────────────────────────
+    warnings.extend(_check_separation(m1, "粗模型"))
+    if m2:
+        warnings.extend(_check_separation(m2, "部分调整模型"))
+    warnings.extend(_check_separation(m3, "全调整模型"))
 
     # ─── 2. 提取暴露 OR 统计 ──────────────────────────────────────────────────
     crude_or_stats = _get_exposure_or_stats(m1, exposure)
@@ -475,9 +508,9 @@ def _get_exposure_or_stats(model_result: dict | None, exposure: str) -> dict[str
     ci_lo_log = float(ci.loc[exposure, 0])
     ci_hi_log = float(ci.loc[exposure, 1])
     p = float(model.pvalues[exposure])
-    or_val = math.exp(beta)
-    or_ci_lo = math.exp(ci_lo_log)
-    or_ci_hi = math.exp(ci_hi_log)
+    or_val = _safe_exp(beta)
+    or_ci_lo = _safe_exp(ci_lo_log)
+    or_ci_hi = _safe_exp(ci_hi_log)
     return {
         "log_or": beta,
         "se": se,
@@ -598,9 +631,9 @@ def _build_full_coef_table(
         p = float(model.pvalues.iloc[idx])
         ci_lo = float(ci_arr[idx, 0])
         ci_hi = float(ci_arr[idx, 1])
-        or_val = math.exp(beta)
-        or_lo = math.exp(ci_lo)
-        or_hi = math.exp(ci_hi)
+        or_val = _safe_exp(beta)
+        or_lo = _safe_exp(ci_lo)
+        or_hi = _safe_exp(ci_hi)
 
         if name in ("const", "Intercept"):
             display_name = "截距（Intercept）"
@@ -794,9 +827,9 @@ def _interaction_test(
         ci_lo = float(ci.loc[int_col, 0])
         ci_hi = float(ci.loc[int_col, 1])
         p = float(model.pvalues[int_col])
-        or_val = math.exp(beta)
-        or_lo = math.exp(ci_lo)
-        or_hi = math.exp(ci_hi)
+        or_val = _safe_exp(beta)
+        or_lo = _safe_exp(ci_lo)
+        or_hi = _safe_exp(ci_hi)
 
         conclusion_text = (
             f"存在统计显著交互效应（p = {_fmt_p(p)}）"
