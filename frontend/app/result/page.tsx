@@ -22,6 +22,7 @@ const METHOD_LABELS: Record<string, string> = {
   logistic_reg_adjusted: "Logistic 回归 — 控制混杂偏倚",
   survival:             "生存分析（Kaplan-Meier）",
   cox_reg:              "Cox 比例风险回归",
+  psm:                  "倾向性得分匹配（PSM）",
 };
 
 export default function ResultPage() {
@@ -104,6 +105,8 @@ export default function ResultPage() {
       <section className="space-y-6">
         {(result.method === "survival" || result.method === "cox_reg")
           ? <SurvivalCoxTables result={result} />
+          : result.method === "psm"
+          ? <PSMTables result={result} />
           : result.tables.map((t) => (
               <ResultTable
                 key={t.title}
@@ -186,6 +189,9 @@ export default function ResultPage() {
           ) : result.method === "cox_reg" ? (
             /* Cox 回归：HR 森林图全宽，其余两列 */
             <CoxRegCharts charts={result.charts} />
+          ) : result.method === "psm" ? (
+            /* PSM：Love plot 全宽，PS 分布并排，SMD 条形图全宽，KM 全宽 */
+            <PSMCharts charts={result.charts} />
           ) : (
             /* 其他方法（差异性分析、线性回归等）：两列并排 */
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -696,8 +702,131 @@ function CoxRegCharts({ charts }: { charts: ChartResult[] }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ResultTable 扩展：phWarningCol（PH 违反行标红）、pHighlightCol
+// PSM 表格区域 — 协变量平衡表 SMD 着色
 // ─────────────────────────────────────────────────────────────────────────────
 
-// 原 ResultTable 已支持 highlightKeyword，此处扩展两个新 prop 供生存/Cox 使用。
-// 通过在原组件入参上叠加即可，无需修改原组件。
+function PSMTables({ result }: SurvivalResultProps) {
+  return (
+    <div className="space-y-6">
+      {result.tables.map((t) => {
+        const isBalance = t.title.includes("平衡");
+        if (!isBalance) return <ResultTable key={t.title} table={t} />;
+
+        // 协变量平衡表：SMD 着色
+        const smdAfterIdx = t.headers.indexOf("匹配后 SMD");
+        const statusIdx = t.headers.indexOf("平衡状态");
+        return (
+          <div key={t.title} className="space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold">{t.title}</h2>
+              <button
+                onClick={() => exportCsv(t)}
+                className="px-3 py-1 border border-border rounded-lg text-xs text-muted-foreground hover:bg-muted/50 transition-colors shrink-0"
+              >
+                导出 CSV
+              </button>
+            </div>
+            <div className="overflow-x-auto rounded-lg border border-border">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/40">
+                  <tr>
+                    {t.headers.map((h) => (
+                      <th key={h} className="px-3 py-2.5 text-left font-semibold whitespace-nowrap border-b-2 border-border">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {t.rows.map((row, i) => {
+                    const status = statusIdx >= 0 ? String(row[statusIdx] ?? "") : "";
+                    const isHeader = row[0] !== "" && !String(row[0]).startsWith("  ") && row.slice(1, -1).every((c) => c === "" || c === null);
+                    const rowClass = isHeader
+                      ? "bg-muted/20"
+                      : status.startsWith("✗")
+                      ? "bg-red-50 dark:bg-red-950/20"
+                      : "hover:bg-muted/20";
+                    return (
+                      <tr key={i} className={`border-b border-border last:border-0 transition-colors ${rowClass}`}>
+                        {row.map((cell, j) => {
+                          let cellClass = j === 0 ? (String(cell).startsWith("  ") ? "pl-7 text-muted-foreground" : isHeader ? "font-semibold" : "font-medium") : "text-muted-foreground";
+                          if (j === smdAfterIdx && typeof cell === "string" && cell !== "—") {
+                            const v = parseFloat(cell);
+                            if (!isNaN(v)) {
+                              cellClass += v < 0.1 ? " text-green-600 font-semibold" : v < 0.2 ? " text-amber-600 font-semibold" : " text-red-600 font-semibold";
+                            }
+                          }
+                          if (j === statusIdx) {
+                            cellClass += status.startsWith("✓") ? " text-green-600 font-medium" : status.startsWith("✗") ? " text-red-600 font-medium" : "";
+                          }
+                          return (
+                            <td key={j} className={`px-3 py-2 whitespace-nowrap ${cellClass}`}>
+                              {cell === null ? "—" : String(cell).startsWith("  ") ? String(cell).trimStart() : String(cell)}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PSM 图表布局
+// Love plot 全宽 → PS 分布并排 → SMD 条形图全宽 → KM 曲线全宽
+// ─────────────────────────────────────────────────────────────────────────────
+
+function PSMCharts({ charts }: { charts: ChartResult[] }) {
+  const lovePlot  = charts.find((c) => c.title.includes("Love"));
+  const psCharts  = charts.filter((c) => c.title.includes("PS 核密度"));
+  const smdBar    = charts.find((c) => c.chart_type === "bar" && c.title.includes("SMD"));
+  const kmChart   = charts.find((c) => c.chart_type === "kaplan_meier");
+
+  return (
+    <div className="space-y-6">
+      {/* Love plot 全宽（最核心）*/}
+      {lovePlot && (
+        <div className="rounded-xl border border-border p-4">
+          <p className="text-sm font-semibold text-muted-foreground mb-2">{lovePlot.title}</p>
+          <EChartsRenderer option={lovePlot.option} height={Math.max(320, (lovePlot.option.yAxis as {data?: unknown[]})?.data?.length ?? 4) * 40 + 80} />
+        </div>
+      )}
+
+      {/* PS 核密度图并排（匹配前 + 匹配后）*/}
+      {psCharts.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {psCharts.map((c, i) => (
+            <div key={i} className="rounded-xl border border-border p-4">
+              <EChartsRenderer option={c.option} height={300} />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* SMD 条形图全宽 */}
+      {smdBar && (
+        <div className="rounded-xl border border-border p-4">
+          <EChartsRenderer option={smdBar.option} height={Math.max(300, ((smdBar.option.yAxis as {data?: unknown[]})?.data?.length ?? 4) * 30 + 80)} />
+        </div>
+      )}
+
+      {/* KM 曲线全宽（仅生存结局） */}
+      {kmChart && (
+        <div className="rounded-xl border border-border p-4 space-y-3">
+          <p className="text-sm font-semibold text-muted-foreground">{kmChart.title}</p>
+          <EChartsRenderer option={kmChart.option} height={380} />
+          <NumberAtRiskTable narData={kmChart.option.numberAtRisk as NarEntry[] | undefined} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ResultTable 扩展：phWarningCol（PH 违反行标红）、pHighlightCol
+// ─────────────────────────────────────────────────────────────────────────────
