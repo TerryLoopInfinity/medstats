@@ -15,7 +15,8 @@ const METHODS: { value: AnalysisMethod; label: string; available: boolean }[] = 
   { value: "linear_reg_adjusted", label: "线性回归控制混杂",         available: true  },
   { value: "logistic_reg",        label: "Logistic 回归",          available: true  },
   { value: "logistic_reg_adjusted", label: "Logistic 回归控制混杂",   available: true  },
-  { value: "survival",     label: "生存分析 & Cox 回归",    available: false },
+  { value: "survival",     label: "生存分析（Kaplan-Meier）",  available: true  },
+  { value: "cox_reg",      label: "Cox 回归",                 available: true  },
   { value: "psm",          label: "倾向性评分匹配",         available: false },
   { value: "prediction",   label: "临床预测模型",           available: false },
   { value: "forest_plot",  label: "亚组分析 & 森林图",      available: false },
@@ -78,6 +79,20 @@ export default function AnalyzePage() {
   const [lrlaStratifyVar, setLrlaStratifyVar] = useState<string>("");
   const [lrlaInteractionVar, setLrlaInteractionVar] = useState<string>("");
   const [lrlaMode, setLrlaMode] = useState<"both" | "crude" | "adjusted">("both");
+
+  // ── 生存分析 params ────────────────────────────────────────────
+  const [survTimeCol, setSurvTimeCol] = useState<string>("");
+  const [survEventCol, setSurvEventCol] = useState<string>("");
+  const [survGroupCol, setSurvGroupCol] = useState<string>("");
+  const [survTimePoints, setSurvTimePoints] = useState<string>("");
+
+  // ── Cox 回归 params ────────────────────────────────────────────
+  const [coxTimeCol, setCoxTimeCol] = useState<string>("");
+  const [coxEventCol, setCoxEventCol] = useState<string>("");
+  const [coxPredictors, setCoxPredictors] = useState<string[]>([]);
+  const [coxCatVars, setCoxCatVars] = useState<string[]>([]);
+  const [coxRefCats, setCoxRefCats] = useState<Record<string, string>>({});
+  const [coxMode, setCoxMode] = useState<"both" | "univariate" | "multivariate">("both");
 
   // ── 假设检验 params ────────────────────────────────────────────
   const [testType, setTestType] = useState<"normality" | "variance" | "chi2" | "onesample">("normality");
@@ -202,6 +217,31 @@ export default function AnalyzePage() {
         ...(lrlaStratifyVar ? { stratify_var: lrlaStratifyVar } : {}),
         ...(lrlaInteractionVar ? { interaction_var: lrlaInteractionVar } : {}),
       };
+    } else if (method === "survival") {
+      if (!survTimeCol) { setError("请选择时间变量"); return; }
+      if (!survEventCol) { setError("请选择事件变量"); return; }
+      const rawPts = survTimePoints.trim();
+      const parsedPts = rawPts
+        ? rawPts.split(",").map((s) => parseFloat(s.trim())).filter((n) => !isNaN(n))
+        : [];
+      params = {
+        time_col: survTimeCol,
+        event_col: survEventCol,
+        ...(survGroupCol ? { group_col: survGroupCol } : {}),
+        ...(parsedPts.length > 0 ? { time_points: parsedPts } : {}),
+      };
+    } else if (method === "cox_reg") {
+      if (!coxTimeCol) { setError("请选择时间变量"); return; }
+      if (!coxEventCol) { setError("请选择事件变量"); return; }
+      if (!coxPredictors.length) { setError("请至少选择一个自变量"); return; }
+      params = {
+        time_col: coxTimeCol,
+        event_col: coxEventCol,
+        predictors: coxPredictors,
+        categorical_vars: coxCatVars,
+        ref_categories: coxRefCats,
+        mode: coxMode,
+      };
     } else if (method === "hypothesis") {
       params = { test_type: testType };
       if (testType === "normality") {
@@ -245,6 +285,8 @@ export default function AnalyzePage() {
     if (method === "linear_reg_adjusted") return !!lraOutcome && !!lraExposure;
     if (method === "logistic_reg") return !!lrLogOutcome && lrLogPredictors.length > 0;
     if (method === "logistic_reg_adjusted") return !!lrlaOutcome && !!lrlaExposure;
+    if (method === "survival") return !!survTimeCol && !!survEventCol;
+    if (method === "cox_reg") return !!coxTimeCol && !!coxEventCol && coxPredictors.length > 0;
     if (method === "hypothesis") {
       if (testType === "normality" || testType === "onesample") return hypoVars.length > 0;
       if (testType === "variance") return hypoVars.length > 0 && !!hypoGroupVar;
@@ -463,6 +505,34 @@ export default function AnalyzePage() {
           setMu={setMu}
           alternative={alternative}
           setAlternative={setAlternative}
+        />
+      ) : method === "survival" ? (
+        <SurvivalConfig
+          upload={upload}
+          timeCol={survTimeCol}
+          setTimeCol={(v) => { setSurvTimeCol(v); if (survEventCol === v) setSurvEventCol(""); if (survGroupCol === v) setSurvGroupCol(""); }}
+          eventCol={survEventCol}
+          setEventCol={(v) => { setSurvEventCol(v); if (survTimeCol === v) setSurvTimeCol(""); }}
+          groupCol={survGroupCol}
+          setGroupCol={setSurvGroupCol}
+          timePoints={survTimePoints}
+          setTimePoints={setSurvTimePoints}
+        />
+      ) : method === "cox_reg" ? (
+        <CoxRegConfig
+          upload={upload}
+          timeCol={coxTimeCol}
+          setTimeCol={(v) => { setCoxTimeCol(v); if (coxEventCol === v) setCoxEventCol(""); setCoxPredictors((p) => p.filter((c) => c !== v)); }}
+          eventCol={coxEventCol}
+          setEventCol={(v) => { setCoxEventCol(v); if (coxTimeCol === v) setCoxTimeCol(""); setCoxPredictors((p) => p.filter((c) => c !== v)); }}
+          predictors={coxPredictors}
+          setPredictors={(preds) => { setCoxPredictors(preds); setCoxCatVars((c) => c.filter((x) => preds.includes(x))); }}
+          catVars={coxCatVars}
+          setCatVars={setCoxCatVars}
+          refCats={coxRefCats}
+          setRefCats={setCoxRefCats}
+          mode={coxMode}
+          setMode={setCoxMode}
         />
       ) : (
         /* 通用变量选择器（descriptive 及未来方法） */
@@ -1863,6 +1933,276 @@ function LogisticRegAdjustedConfig({
           {stratifyVar && <p>分层变量：<span className="font-medium text-foreground">{stratifyVar}</span></p>}
           {interactionVar && <p>交互项：<span className="font-medium text-foreground">{exposure} × {interactionVar}</span></p>}
           <p>模式：<span className="font-medium text-foreground">{MODES.find((m) => m.value === mode)?.label}</span></p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 生存分析配置组件
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface SurvivalConfigProps {
+  upload: UploadResponse;
+  timeCol: string;
+  setTimeCol: (v: string) => void;
+  eventCol: string;
+  setEventCol: (v: string) => void;
+  groupCol: string;
+  setGroupCol: (v: string) => void;
+  timePoints: string;
+  setTimePoints: (v: string) => void;
+}
+
+function SurvivalConfig({
+  upload, timeCol, setTimeCol, eventCol, setEventCol,
+  groupCol, setGroupCol, timePoints, setTimePoints,
+}: SurvivalConfigProps) {
+  const cols = upload.column_names;
+
+  return (
+    <div className="space-y-6">
+      {/* 时间变量 */}
+      <section className="space-y-2">
+        <div>
+          <h2 className="font-semibold">时间变量 <span className="text-destructive text-xs font-normal">必选</span></h2>
+          <p className="text-xs text-muted-foreground mt-0.5">连续数值，单位可为天 / 月 / 年</p>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+          {cols.map((col) => (
+            <label key={col} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${timeCol === col ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"}`}>
+              <input type="radio" name="surv_time" value={col} checked={timeCol === col} onChange={() => setTimeCol(col)} className="accent-primary" />
+              <span className="truncate" title={col}>{col}</span>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      {/* 事件变量 */}
+      <section className="space-y-2">
+        <div>
+          <h2 className="font-semibold">事件变量 <span className="text-destructive text-xs font-normal">必选</span></h2>
+          <p className="text-xs text-muted-foreground mt-0.5">0 = 删失，1 = 事件发生</p>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+          {cols.filter((c) => c !== timeCol).map((col) => (
+            <label key={col} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${eventCol === col ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"}`}>
+              <input type="radio" name="surv_event" value={col} checked={eventCol === col} onChange={() => setEventCol(col)} className="accent-primary" />
+              <span className="truncate" title={col}>{col}</span>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      {/* 分组变量（可选） */}
+      <section className="space-y-2">
+        <div>
+          <h2 className="font-semibold">分组变量 <span className="text-muted-foreground text-xs font-normal">可选</span></h2>
+          <p className="text-xs text-muted-foreground mt-0.5">提供分组变量时将绘制多组 KM 曲线并进行 Log-rank 检验</p>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+          <label className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${groupCol === "" ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"}`}>
+            <input type="radio" name="surv_group" value="" checked={groupCol === ""} onChange={() => setGroupCol("")} className="accent-primary" />
+            <span className="text-muted-foreground">不分组</span>
+          </label>
+          {cols.filter((c) => c !== timeCol && c !== eventCol).map((col) => (
+            <label key={col} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${groupCol === col ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"}`}>
+              <input type="radio" name="surv_group" value={col} checked={groupCol === col} onChange={() => setGroupCol(col)} className="accent-primary" />
+              <span className="truncate" title={col}>{col}</span>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      {/* 指定时间点 */}
+      <section className="space-y-2">
+        <h2 className="font-semibold">指定时间点生存率 <span className="text-muted-foreground text-xs font-normal">可选</span></h2>
+        <p className="text-xs text-muted-foreground">用逗号分隔，如 <code className="bg-muted px-1 rounded text-xs">365,1095,1825</code>（天）或 <code className="bg-muted px-1 rounded text-xs">1,3,5</code>（年）</p>
+        <input
+          type="text"
+          value={timePoints}
+          onChange={(e) => setTimePoints(e.target.value)}
+          placeholder="例：365,1095,1825"
+          className="w-full max-w-xs px-3 py-2 rounded-lg border border-border text-sm bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
+        />
+      </section>
+
+      {/* 配置摘要 */}
+      {timeCol && eventCol && (
+        <div className="rounded-lg bg-muted/40 border border-border px-4 py-3 text-xs text-muted-foreground space-y-1">
+          <p>时间变量：<span className="font-medium text-foreground">{timeCol}</span></p>
+          <p>事件变量：<span className="font-medium text-foreground">{eventCol}</span></p>
+          {groupCol && <p>分组变量：<span className="font-medium text-foreground">{groupCol}</span></p>}
+          {timePoints && <p>时间点：<span className="font-medium text-foreground">{timePoints}</span></p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cox 回归配置组件
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface CoxRegConfigProps {
+  upload: UploadResponse;
+  timeCol: string;
+  setTimeCol: (v: string) => void;
+  eventCol: string;
+  setEventCol: (v: string) => void;
+  predictors: string[];
+  setPredictors: (v: string[]) => void;
+  catVars: string[];
+  setCatVars: React.Dispatch<React.SetStateAction<string[]>>;
+  refCats: Record<string, string>;
+  setRefCats: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  mode: "both" | "univariate" | "multivariate";
+  setMode: (v: "both" | "univariate" | "multivariate") => void;
+}
+
+function CoxRegConfig({
+  upload, timeCol, setTimeCol, eventCol, setEventCol,
+  predictors, setPredictors, catVars, setCatVars,
+  refCats, setRefCats, mode, setMode,
+}: CoxRegConfigProps) {
+  const cols = upload.column_names;
+  const reservedCols = new Set([timeCol, eventCol]);
+
+  const togglePredictor = (col: string) => {
+    if (reservedCols.has(col)) return;
+    const next = predictors.includes(col)
+      ? predictors.filter((c) => c !== col)
+      : [...predictors, col];
+    setPredictors(next);
+  };
+
+  const toggleCatVar = (col: string) => {
+    if (!predictors.includes(col)) return;
+    setCatVars((prev) =>
+      prev.includes(col) ? prev.filter((c) => c !== col) : [...prev, col]
+    );
+  };
+
+  const COX_MODES: { value: "both" | "univariate" | "multivariate"; label: string; desc: string }[] = [
+    { value: "both",          label: "单变量 + 多变量",   desc: "分别呈现，便于对比" },
+    { value: "univariate",    label: "仅单变量",           desc: "逐一分析每个自变量" },
+    { value: "multivariate",  label: "仅多变量",           desc: "所有自变量同时纳入" },
+  ];
+
+  return (
+    <div className="space-y-6">
+      {/* 时间变量 */}
+      <section className="space-y-2">
+        <div>
+          <h2 className="font-semibold">时间变量 <span className="text-destructive text-xs font-normal">必选</span></h2>
+          <p className="text-xs text-muted-foreground mt-0.5">连续数值，必须 &gt; 0</p>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+          {cols.map((col) => (
+            <label key={col} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${timeCol === col ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"}`}>
+              <input type="radio" name="cox_time" value={col} checked={timeCol === col} onChange={() => setTimeCol(col)} className="accent-primary" />
+              <span className="truncate" title={col}>{col}</span>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      {/* 事件变量 */}
+      <section className="space-y-2">
+        <div>
+          <h2 className="font-semibold">事件变量 <span className="text-destructive text-xs font-normal">必选</span></h2>
+          <p className="text-xs text-muted-foreground mt-0.5">0 = 删失，1 = 事件发生</p>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+          {cols.filter((c) => c !== timeCol).map((col) => (
+            <label key={col} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${eventCol === col ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"}`}>
+              <input type="radio" name="cox_event" value={col} checked={eventCol === col} onChange={() => setEventCol(col)} className="accent-primary" />
+              <span className="truncate" title={col}>{col}</span>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      {/* 自变量（多选） */}
+      <section className="space-y-2">
+        <div>
+          <h2 className="font-semibold">自变量 <span className="text-destructive text-xs font-normal">必选，可多选</span></h2>
+          <p className="text-xs text-muted-foreground mt-0.5">不能与时间变量 / 事件变量重复</p>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+          {cols.filter((c) => !reservedCols.has(c)).map((col) => (
+            <label key={col} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${predictors.includes(col) ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"}`}>
+              <input type="checkbox" checked={predictors.includes(col)} onChange={() => togglePredictor(col)} className="accent-primary" />
+              <span className="truncate" title={col}>{col}</span>
+            </label>
+          ))}
+        </div>
+        <p className="text-xs text-muted-foreground">已选 {predictors.length} 个</p>
+      </section>
+
+      {/* 分类变量标记 + 参考组 */}
+      {predictors.length > 0 && (
+        <section className="space-y-3">
+          <div>
+            <h2 className="font-semibold">标记分类变量 <span className="text-muted-foreground text-xs font-normal">可选</span></h2>
+            <p className="text-xs text-muted-foreground mt-0.5">标记为分类变量的列将进行 dummy 编码</p>
+          </div>
+          <div className="space-y-2">
+            {predictors.map((col) => {
+              const isCat = catVars.includes(col);
+              return (
+                <div key={col} className="flex items-center gap-3 flex-wrap">
+                  <label className="flex items-center gap-2 text-sm cursor-pointer min-w-[140px]">
+                    <input type="checkbox" checked={isCat} onChange={() => toggleCatVar(col)} className="accent-primary" />
+                    <span className="font-medium">{col}</span>
+                    {isCat && <span className="text-xs bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded">分类</span>}
+                  </label>
+                  {isCat && (
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-muted-foreground">参考组：</span>
+                      <input
+                        type="text"
+                        value={refCats[col] ?? ""}
+                        onChange={(e) => setRefCats((prev) => ({ ...prev, [col]: e.target.value }))}
+                        placeholder="默认第一类"
+                        className="px-2 py-1 rounded border border-border bg-background text-sm w-28 focus:outline-none focus:ring-1 focus:ring-primary/40"
+                      />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* 分析模式 */}
+      <section className="space-y-2">
+        <h2 className="font-semibold">分析模式</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          {COX_MODES.map(({ value, label, desc }) => (
+            <label key={value} className={`flex items-start gap-3 px-4 py-3 rounded-lg border cursor-pointer transition-colors ${mode === value ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"}`}>
+              <input type="radio" name="cox_mode" value={value} checked={mode === value} onChange={() => setMode(value)} className="accent-primary mt-0.5" />
+              <div>
+                <p className="text-sm font-medium">{label}</p>
+                <p className="text-xs text-muted-foreground">{desc}</p>
+              </div>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      {/* 配置摘要 */}
+      {timeCol && eventCol && predictors.length > 0 && (
+        <div className="rounded-lg bg-muted/40 border border-border px-4 py-3 text-xs text-muted-foreground space-y-1">
+          <p>时间变量：<span className="font-medium text-foreground">{timeCol}</span></p>
+          <p>事件变量：<span className="font-medium text-foreground">{eventCol}</span></p>
+          <p>自变量（{predictors.length}）：<span className="font-medium text-foreground">{predictors.join("、")}</span></p>
+          {catVars.length > 0 && (
+            <p>分类变量：<span className="font-medium text-foreground">{catVars.map((v) => `${v}（参考：${refCats[v] ?? "默认"}）`).join("、")}</span></p>
+          )}
+          <p>模式：<span className="font-medium text-foreground">{COX_MODES.find((m) => m.value === mode)?.label}</span></p>
         </div>
       )}
     </div>
