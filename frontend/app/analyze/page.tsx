@@ -17,7 +17,7 @@ const METHODS: { value: AnalysisMethod; label: string; available: boolean }[] = 
   { value: "logistic_reg_adjusted", label: "Logistic 回归控制混杂",   available: true  },
   { value: "survival",     label: "生存分析（Kaplan-Meier）",  available: true  },
   { value: "cox_reg",      label: "Cox 回归",                 available: true  },
-  { value: "psm",          label: "倾向性评分匹配",         available: false },
+  { value: "psm",          label: "倾向性得分匹配（PSM）",  available: true  },
   { value: "prediction",   label: "临床预测模型",           available: false },
   { value: "forest_plot",  label: "亚组分析 & 森林图",      available: false },
   { value: "rcs",          label: "RCS 曲线",               available: false },
@@ -93,6 +93,18 @@ export default function AnalyzePage() {
   const [coxCatVars, setCoxCatVars] = useState<string[]>([]);
   const [coxRefCats, setCoxRefCats] = useState<Record<string, string>>({});
   const [coxMode, setCoxMode] = useState<"both" | "univariate" | "multivariate">("both");
+
+  // ── PSM params ─────────────────────────────────────────────────
+  const [psmTreatCol, setPsmTreatCol] = useState<string>("");
+  const [psmCovariates, setPsmCovariates] = useState<string[]>([]);
+  const [psmOutcomeCol, setPsmOutcomeCol] = useState<string>("");
+  const [psmOutcomeType, setPsmOutcomeType] = useState<"continuous" | "binary" | "survival">("survival");
+  const [psmTimeCol, setPsmTimeCol] = useState<string>("");
+  const [psmEventCol, setPsmEventCol] = useState<string>("");
+  const [psmMethod, setPsmMethod] = useState<"nearest" | "caliper" | "optimal">("nearest");
+  const [psmCaliper, setPsmCaliper] = useState<string>("");
+  const [psmRatio, setPsmRatio] = useState<1 | 2 | 3>(1);
+  const [psmWithReplacement, setPsmWithReplacement] = useState<boolean>(false);
 
   // ── 假设检验 params ────────────────────────────────────────────
   const [testType, setTestType] = useState<"normality" | "variance" | "chi2" | "onesample">("normality");
@@ -242,6 +254,23 @@ export default function AnalyzePage() {
         ref_categories: coxRefCats,
         mode: coxMode,
       };
+    } else if (method === "psm") {
+      if (!psmTreatCol) { setError("请选择处理变量"); return; }
+      if (!psmCovariates.length) { setError("请至少选择一个协变量"); return; }
+      if (psmOutcomeType === "survival" && (!psmTimeCol || !psmEventCol)) {
+        setError("生存结局需要选择时间变量和事件变量"); return;
+      }
+      params = {
+        treatment_col: psmTreatCol,
+        covariates: psmCovariates,
+        outcome_type: psmOutcomeType,
+        method: psmMethod,
+        ratio: psmRatio,
+        with_replacement: psmWithReplacement,
+        ...(psmOutcomeCol ? { outcome_col: psmOutcomeCol } : {}),
+        ...(psmOutcomeType === "survival" ? { time_col: psmTimeCol, event_col: psmEventCol } : {}),
+        ...(psmCaliper.trim() ? { caliper: parseFloat(psmCaliper) } : {}),
+      };
     } else if (method === "hypothesis") {
       params = { test_type: testType };
       if (testType === "normality") {
@@ -287,6 +316,10 @@ export default function AnalyzePage() {
     if (method === "logistic_reg_adjusted") return !!lrlaOutcome && !!lrlaExposure;
     if (method === "survival") return !!survTimeCol && !!survEventCol;
     if (method === "cox_reg") return !!coxTimeCol && !!coxEventCol && coxPredictors.length > 0;
+    if (method === "psm") {
+      const survOk = psmOutcomeType !== "survival" || (!!psmTimeCol && !!psmEventCol);
+      return !!psmTreatCol && psmCovariates.length > 0 && survOk;
+    }
     if (method === "hypothesis") {
       if (testType === "normality" || testType === "onesample") return hypoVars.length > 0;
       if (testType === "variance") return hypoVars.length > 0 && !!hypoGroupVar;
@@ -533,6 +566,30 @@ export default function AnalyzePage() {
           setRefCats={setCoxRefCats}
           mode={coxMode}
           setMode={setCoxMode}
+        />
+      ) : method === "psm" ? (
+        <PSMConfig
+          upload={upload}
+          treatCol={psmTreatCol}
+          setTreatCol={(v) => { setPsmTreatCol(v); setPsmCovariates((c) => c.filter((x) => x !== v)); setPsmOutcomeCol((o) => o === v ? "" : o); }}
+          covariates={psmCovariates}
+          setCovariates={(covs) => { setPsmCovariates(covs.filter((c) => c !== psmTreatCol)); }}
+          outcomeCol={psmOutcomeCol}
+          setOutcomeCol={setPsmOutcomeCol}
+          outcomeType={psmOutcomeType}
+          setOutcomeType={setPsmOutcomeType}
+          timeCol={psmTimeCol}
+          setTimeCol={setPsmTimeCol}
+          eventCol={psmEventCol}
+          setEventCol={setPsmEventCol}
+          method={psmMethod}
+          setMethod={setPsmMethod}
+          caliper={psmCaliper}
+          setCaliper={setPsmCaliper}
+          ratio={psmRatio}
+          setRatio={setPsmRatio}
+          withReplacement={psmWithReplacement}
+          setWithReplacement={setPsmWithReplacement}
         />
       ) : (
         /* 通用变量选择器（descriptive 及未来方法） */
@@ -2212,5 +2269,238 @@ function CoxRegConfig({
 function Spinner() {
   return (
     <div className="w-4 h-4 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" />
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PSM 配置组件
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface PSMConfigProps {
+  upload: UploadResponse;
+  treatCol: string; setTreatCol: (v: string) => void;
+  covariates: string[]; setCovariates: (v: string[]) => void;
+  outcomeCol: string; setOutcomeCol: (v: string) => void;
+  outcomeType: "continuous" | "binary" | "survival"; setOutcomeType: (v: "continuous" | "binary" | "survival") => void;
+  timeCol: string; setTimeCol: (v: string) => void;
+  eventCol: string; setEventCol: (v: string) => void;
+  method: "nearest" | "caliper" | "optimal"; setMethod: (v: "nearest" | "caliper" | "optimal") => void;
+  caliper: string; setCaliper: (v: string) => void;
+  ratio: 1 | 2 | 3; setRatio: (v: 1 | 2 | 3) => void;
+  withReplacement: boolean; setWithReplacement: (v: boolean) => void;
+}
+
+function PSMConfig({
+  upload,
+  treatCol, setTreatCol,
+  covariates, setCovariates,
+  outcomeCol, setOutcomeCol,
+  outcomeType, setOutcomeType,
+  timeCol, setTimeCol,
+  eventCol, setEventCol,
+  method, setMethod,
+  caliper, setCaliper,
+  ratio, setRatio,
+  withReplacement, setWithReplacement,
+}: PSMConfigProps) {
+  const cols = upload.column_names;
+  const nonTreat = cols.filter((c) => c !== treatCol);
+
+  const toggleCov = (col: string) =>
+    setCovariates(covariates.includes(col) ? covariates.filter((c) => c !== col) : [...covariates, col]);
+
+  const OUTCOME_TYPES = [
+    { value: "continuous" as const, label: "连续结局", desc: "配对 Wilcoxon 检验" },
+    { value: "binary"     as const, label: "二分类结局", desc: "McNemar 检验" },
+    { value: "survival"   as const, label: "生存结局", desc: "分层 Cox + Log-rank" },
+  ];
+
+  const METHODS = [
+    { value: "nearest" as const, label: "最近邻（Greedy）", desc: "贪心搜索最近 PS 对，速度快" },
+    { value: "caliper" as const, label: "Caliper 约束",     desc: "限制最大 PS 差（默认 0.2×SD）" },
+    { value: "optimal" as const, label: "最优匹配（1:1）",  desc: "最小化总体 PS 距离，仅支持 1:1" },
+  ];
+
+  return (
+    <div className="space-y-6">
+      {/* ── 处理变量 ── */}
+      <section className="space-y-3">
+        <div>
+          <h2 className="font-semibold">处理变量 <span className="text-destructive text-xs font-normal">必选</span></h2>
+          <p className="text-xs text-muted-foreground mt-0.5">二分类变量，区分处理组与对照组（如 treatment、group）</p>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+          {cols.map((col) => (
+            <label key={col} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${treatCol === col ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"}`}>
+              <input type="radio" name="psm_treat" value={col} checked={treatCol === col} onChange={() => setTreatCol(col)} className="accent-primary" />
+              <span className="truncate" title={col}>{col}</span>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      {/* ── 协变量 ── */}
+      <section className="space-y-3">
+        <div>
+          <h2 className="font-semibold">协变量 <span className="text-destructive text-xs font-normal">必选，可多选</span></h2>
+          <p className="text-xs text-muted-foreground mt-0.5">用于估计倾向性得分（PS）的混杂变量；分类变量自动 dummy 编码</p>
+        </div>
+        {!treatCol ? (
+          <p className="text-xs text-muted-foreground">请先选择处理变量</p>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+            {nonTreat.map((col) => (
+              <label key={col} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${covariates.includes(col) ? "border-amber-500 bg-amber-50 dark:bg-amber-950/20 font-medium" : "border-border hover:border-amber-400/60"}`}>
+                <input type="checkbox" checked={covariates.includes(col)} onChange={() => toggleCov(col)} className="accent-amber-500" />
+                <span className="truncate" title={col}>{col}</span>
+              </label>
+            ))}
+          </div>
+        )}
+        {covariates.length > 0 && <p className="text-xs text-muted-foreground">已选 {covariates.length} 个协变量</p>}
+      </section>
+
+      {/* ── 结局变量 ── */}
+      <section className="space-y-3">
+        <div>
+          <h2 className="font-semibold">结局变量 <span className="text-muted-foreground text-xs font-normal">可选（匹配后处理效应估计）</span></h2>
+        </div>
+        <div className="flex flex-wrap gap-2 mb-3">
+          {OUTCOME_TYPES.map((ot) => (
+            <button
+              key={ot.value}
+              type="button"
+              onClick={() => setOutcomeType(ot.value)}
+              className={`px-3 py-1.5 rounded-lg border text-sm transition-colors ${outcomeType === ot.value ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"}`}
+            >
+              {ot.label}
+              <span className="text-xs text-muted-foreground ml-1.5">({ot.desc})</span>
+            </button>
+          ))}
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+          <label className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${!outcomeCol ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"}`}>
+            <input type="radio" name="psm_outcome" value="" checked={!outcomeCol} onChange={() => setOutcomeCol("")} className="accent-primary" />
+            <span className="text-muted-foreground">不分析结局</span>
+          </label>
+          {nonTreat.filter((c) => !covariates.includes(c)).map((col) => (
+            <label key={col} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${outcomeCol === col ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"}`}>
+              <input type="radio" name="psm_outcome" value={col} checked={outcomeCol === col} onChange={() => setOutcomeCol(col)} className="accent-primary" />
+              <span className="truncate" title={col}>{col}</span>
+            </label>
+          ))}
+        </div>
+
+        {/* 生存结局：时间 + 事件变量 */}
+        {outcomeType === "survival" && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2">
+            <div className="space-y-2">
+              <p className="text-sm font-medium">时间变量 <span className="text-destructive text-xs">必选</span></p>
+              <div className="flex flex-wrap gap-2">
+                {cols.filter((c) => c !== treatCol).map((col) => (
+                  <label key={col} className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-xs cursor-pointer transition-colors ${timeCol === col ? "border-teal-500 bg-teal-50 dark:bg-teal-950/20 font-medium" : "border-border hover:border-teal-400/60"}`}>
+                    <input type="radio" name="psm_time" value={col} checked={timeCol === col} onChange={() => setTimeCol(col)} className="accent-teal-500" />
+                    {col}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-2">
+              <p className="text-sm font-medium">事件变量 <span className="text-destructive text-xs">必选</span></p>
+              <div className="flex flex-wrap gap-2">
+                {cols.filter((c) => c !== treatCol && c !== timeCol).map((col) => (
+                  <label key={col} className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-xs cursor-pointer transition-colors ${eventCol === col ? "border-teal-500 bg-teal-50 dark:bg-teal-950/20 font-medium" : "border-border hover:border-teal-400/60"}`}>
+                    <input type="radio" name="psm_event" value={col} checked={eventCol === col} onChange={() => setEventCol(col)} className="accent-teal-500" />
+                    {col}
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* ── 匹配参数 ── */}
+      <section className="space-y-4">
+        <h2 className="font-semibold">匹配参数</h2>
+
+        {/* 匹配方法 */}
+        <div className="space-y-2">
+          <p className="text-sm text-muted-foreground">匹配方法</p>
+          <div className="flex flex-wrap gap-2">
+            {METHODS.map((m) => (
+              <button
+                key={m.value}
+                type="button"
+                onClick={() => setMethod(m.value)}
+                className={`px-3 py-1.5 rounded-lg border text-sm transition-colors ${method === m.value ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"}`}
+              >
+                {m.label}
+                <span className="text-xs text-muted-foreground ml-1.5">— {m.desc}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* 匹配比例 + 放回 + caliper */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="space-y-2">
+            <p className="text-sm text-muted-foreground">匹配比例</p>
+            <div className="flex gap-2">
+              {([1, 2, 3] as const).map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => setRatio(r)}
+                  disabled={method === "optimal" && r !== 1}
+                  className={`px-3 py-1.5 rounded-lg border text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${ratio === r ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"}`}
+                >
+                  1:{r}
+                </button>
+              ))}
+            </div>
+            {method === "optimal" && <p className="text-xs text-muted-foreground">最优匹配仅支持 1:1</p>}
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-sm text-muted-foreground">放回匹配</p>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={withReplacement}
+                onChange={(e) => setWithReplacement(e.target.checked)}
+                className="accent-primary w-4 h-4"
+              />
+              允许同一对照重复使用
+            </label>
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-sm text-muted-foreground">Caliper 值 <span className="text-xs">（留空 = 0.2×SD(PS)）</span></p>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              max="1"
+              value={caliper}
+              onChange={(e) => setCaliper(e.target.value)}
+              placeholder="如 0.05"
+              className="w-full px-3 py-1.5 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary/40"
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* 配置预览 */}
+      {treatCol && covariates.length > 0 && (
+        <div className="rounded-lg bg-muted/40 border border-border px-4 py-3 text-xs text-muted-foreground space-y-1">
+          <p>处理变量：<span className="font-medium text-foreground">{treatCol}</span></p>
+          <p>协变量（{covariates.length}）：<span className="font-medium text-foreground">{covariates.join("、")}</span></p>
+          {outcomeCol && <p>结局变量：<span className="font-medium text-foreground">{outcomeCol}（{OUTCOME_TYPES.find((o) => o.value === outcomeType)?.label}）</span></p>}
+          {outcomeType === "survival" && <p>时间 / 事件：<span className="font-medium text-foreground">{timeCol || "—"} / {eventCol || "—"}</span></p>}
+          <p>匹配：<span className="font-medium text-foreground">{METHODS.find((m) => m.value === method)?.label} · 1:{ratio} · {withReplacement ? "放回" : "不放回"}</span></p>
+        </div>
+      )}
+    </div>
   );
 }
