@@ -10,6 +10,7 @@ from app.api.routes import (
     linear_reg_adjusted,
     logistic_reg,
     logistic_reg_adjusted,
+    prediction,
     psm,
     survival,
     table_one,
@@ -30,3 +31,4 @@ router.include_router(logistic_reg_adjusted.router, prefix="/logistic_reg_adjust
 router.include_router(survival.router, prefix="/survival")
 router.include_router(cox_reg.router, prefix="/cox_reg")
 router.include_router(psm.router, prefix="/psm")
+router.include_router(prediction.router, prefix="/prediction")

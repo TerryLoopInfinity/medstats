@@ -23,6 +23,7 @@ const METHOD_LABELS: Record<string, string> = {
   survival:             "生存分析（Kaplan-Meier）",
   cox_reg:              "Cox 比例风险回归",
   psm:                  "倾向性得分匹配（PSM）",
+  prediction:           "临床预测模型",
 };
 
 export default function ResultPage() {
@@ -192,6 +193,9 @@ export default function ResultPage() {
           ) : result.method === "psm" ? (
             /* PSM：Love plot 全宽，PS 分布并排，SMD 条形图全宽，KM 全宽 */
             <PSMCharts charts={result.charts} />
+          ) : result.method === "prediction" ? (
+            /* 临床预测模型：Nomogram 全宽 → ROC/校准并排 → DCA 全宽 → Bootstrap 直方图 */
+            <PredictionCharts charts={result.charts} />
           ) : (
             /* 其他方法（差异性分析、线性回归等）：两列并排 */
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -823,6 +827,240 @@ function PSMCharts({ charts }: { charts: ChartResult[] }) {
           <NumberAtRiskTable narData={kmChart.option.numberAtRisk as NarEntry[] | undefined} />
         </div>
       )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 临床预测模型图表布局
+// ─────────────────────────────────────────────────────────────────────────────
+
+function PredictionCharts({ charts }: { charts: ChartResult[] }) {
+  const nomo      = charts.find((c) => c.chart_type === "nomogram");
+  const roc       = charts.find((c) => c.title === "ROC 曲线");
+  const calib     = charts.find((c) => c.title === "校准曲线");
+  const dca       = charts.find((c) => c.title.includes("DCA"));
+  const bootstrap = charts.find((c) => c.title.includes("Bootstrap"));
+  const tdepAuc   = charts.find((c) => c.title.includes("时间依赖"));
+  const coxCalib  = charts.find((c) => c.title.includes("Cox 校准"));
+
+  return (
+    <div className="space-y-6">
+      {/* Nomogram 全宽（最核心图表） */}
+      {nomo && (
+        <div className="rounded-xl border border-border p-4">
+          <p className="text-sm font-semibold mb-3">列线图（Nomogram）</p>
+          <NomogramChart data={nomo.option.nomogramData as NomogramData} />
+        </div>
+      )}
+
+      {/* ROC + 校准曲线并排（logistic） */}
+      {(roc || calib) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {roc && (
+            <div className="rounded-xl border border-border p-4">
+              <EChartsRenderer option={roc.option} height={340} />
+            </div>
+          )}
+          {calib && (
+            <div className="rounded-xl border border-border p-4">
+              <EChartsRenderer option={calib.option} height={340} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 时间依赖 AUC（Cox） */}
+      {tdepAuc && (
+        <div className="rounded-xl border border-border p-4">
+          <EChartsRenderer option={tdepAuc.option} height={300} />
+        </div>
+      )}
+
+      {/* Cox 校准曲线（Cox） */}
+      {coxCalib && (
+        <div className="rounded-xl border border-border p-4">
+          <EChartsRenderer option={coxCalib.option} height={300} />
+        </div>
+      )}
+
+      {/* DCA 曲线全宽 */}
+      {dca && (
+        <div className="rounded-xl border border-border p-4">
+          <EChartsRenderer option={dca.option} height={320} />
+        </div>
+      )}
+
+      {/* Bootstrap AUC/C-index 分布直方图 */}
+      {bootstrap && (
+        <div className="rounded-xl border border-border p-4">
+          <EChartsRenderer option={bootstrap.option} height={280} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Nomogram 渲染组件（基于 SVG，ECharts 不原生支持）
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface NomogramTick { label: string; pts: number }
+interface NomogramVariable { name: string; type: string; ticks: NomogramTick[] }
+interface NomogramData {
+  model_type: string;
+  variables: NomogramVariable[];
+  total_points: { min: number; max: number; ticks: number[] };
+  prob_scale: { pts: number; prob: number }[];
+  prob_label?: string;
+}
+
+function NomogramChart({ data }: { data?: NomogramData }) {
+  if (!data || !data.variables?.length) {
+    return <p className="text-sm text-muted-foreground text-center py-8">Nomogram 数据不可用</p>;
+  }
+
+  const { variables, total_points, prob_scale, prob_label } = data;
+  const totalMax = total_points.max || 100;
+
+  // SVG layout
+  const rowH = 52;
+  const labelW = 140;
+  const axisW = 600;
+  const paddingX = 20;
+  const svgW = labelW + axisW + paddingX * 2;
+  const headerRows = 1; // "Points" header row
+  const totalPtsRow = 1;
+  const probRow = 1;
+  const totalRows = headerRows + variables.length + totalPtsRow + probRow;
+  const svgH = totalRows * rowH + 40;
+
+  const ptsToX = (pts: number) => labelW + paddingX + (pts / totalMax) * axisW;
+
+  // Points header ticks (0..100 evenly)
+  const headerTicks = Array.from({ length: 11 }, (_, i) => Math.round((i / 10) * 100));
+
+  // Colors
+  const rowColors = ["#f0f4ff", "#fff", "#f0fff4", "#fff8f0", "#f8f0ff"];
+
+  return (
+    <div className="overflow-x-auto">
+      <svg
+        width={svgW}
+        height={svgH}
+        className="font-sans text-xs"
+        style={{ fontFamily: "system-ui, sans-serif" }}
+      >
+        {/* ── Points header row ── */}
+        <rect x={0} y={0} width={svgW} height={rowH} fill="#f8fafc" />
+        <text x={labelW - 8} y={rowH / 2 + 5} textAnchor="end" fontSize={12} fontWeight={600} fill="#374151">
+          分值
+        </text>
+        {headerTicks.map((tick) => {
+          const scaledPts = (tick / 100) * totalMax;
+          const x = ptsToX(scaledPts);
+          return (
+            <g key={tick}>
+              <line x1={x} y1={rowH * 0.3} x2={x} y2={rowH * 0.7} stroke="#9ca3af" strokeWidth={1} />
+              <text x={x} y={rowH * 0.9} textAnchor="middle" fontSize={10} fill="#6b7280">{tick}</text>
+            </g>
+          );
+        })}
+        <line x1={labelW + paddingX} y1={rowH / 2} x2={labelW + paddingX + axisW} y2={rowH / 2} stroke="#d1d5db" strokeWidth={1} />
+
+        {/* ── Variable rows ── */}
+        {variables.map((v, vi) => {
+          const y = (vi + 1) * rowH;
+          const bg = rowColors[vi % rowColors.length];
+          const minPts = Math.min(...v.ticks.map((t) => t.pts));
+          const maxPts = Math.max(...v.ticks.map((t) => t.pts));
+          return (
+            <g key={v.name}>
+              <rect x={0} y={y} width={svgW} height={rowH} fill={bg} />
+              <text x={labelW - 8} y={y + rowH / 2 + 4} textAnchor="end" fontSize={11} fontWeight={500} fill="#1f2937">
+                {v.name}
+              </text>
+              {/* Axis line */}
+              <line
+                x1={ptsToX(minPts)} y1={y + rowH / 2}
+                x2={ptsToX(maxPts)} y2={y + rowH / 2}
+                stroke="#6b7280" strokeWidth={1.5}
+              />
+              {/* Ticks */}
+              {v.ticks.map((tick, ti) => {
+                const x = ptsToX(tick.pts);
+                const isTop = ti % 2 === 0;
+                return (
+                  <g key={ti}>
+                    <line x1={x} y1={y + rowH * 0.3} x2={x} y2={y + rowH * 0.7} stroke="#374151" strokeWidth={1} />
+                    <text
+                      x={x} y={isTop ? y + rowH * 0.22 : y + rowH * 0.9}
+                      textAnchor="middle" fontSize={9} fill="#374151"
+                    >
+                      {tick.label}
+                    </text>
+                  </g>
+                );
+              })}
+            </g>
+          );
+        })}
+
+        {/* ── Total Points row ── */}
+        {(() => {
+          const y = (variables.length + 1) * rowH;
+          return (
+            <g>
+              <rect x={0} y={y} width={svgW} height={rowH} fill="#fef3c7" />
+              <text x={labelW - 8} y={y + rowH / 2 + 4} textAnchor="end" fontSize={11} fontWeight={600} fill="#92400e">
+                总分
+              </text>
+              <line x1={ptsToX(0)} y1={y + rowH / 2} x2={ptsToX(totalMax)} y2={y + rowH / 2} stroke="#d97706" strokeWidth={1.5} />
+              {total_points.ticks.map((tp, ti) => {
+                const x = ptsToX(tp);
+                return (
+                  <g key={ti}>
+                    <line x1={x} y1={y + rowH * 0.3} x2={x} y2={y + rowH * 0.7} stroke="#92400e" strokeWidth={1} />
+                    <text x={x} y={y + rowH * 0.85} textAnchor="middle" fontSize={9} fill="#92400e">{Math.round(tp)}</text>
+                  </g>
+                );
+              })}
+            </g>
+          );
+        })()}
+
+        {/* ── Probability row ── */}
+        {(() => {
+          const y = (variables.length + 2) * rowH;
+          const pLabel = prob_label ?? (data.model_type === "cox" ? "生存率" : "预测概率");
+          // Sample prob ticks every ~5th point
+          const showProbs = prob_scale.filter((_, i) => i % 4 === 0 || i === prob_scale.length - 1);
+          return (
+            <g>
+              <rect x={0} y={y} width={svgW} height={rowH} fill="#f0fdf4" />
+              <text x={labelW - 8} y={y + rowH / 2 + 4} textAnchor="end" fontSize={11} fontWeight={600} fill="#065f46">
+                {pLabel}
+              </text>
+              <line x1={ptsToX(0)} y1={y + rowH / 2} x2={ptsToX(totalMax)} y2={y + rowH / 2} stroke="#059669" strokeWidth={1.5} />
+              {showProbs.map((pt, pi) => {
+                const x = ptsToX(pt.pts);
+                const isTop = pi % 2 === 0;
+                return (
+                  <g key={pi}>
+                    <line x1={x} y1={y + rowH * 0.3} x2={x} y2={y + rowH * 0.7} stroke="#065f46" strokeWidth={1} />
+                    <text
+                      x={x} y={isTop ? y + rowH * 0.22 : y + rowH * 0.9}
+                      textAnchor="middle" fontSize={9} fill="#065f46"
+                    >
+                      {pt.prob.toFixed(2)}
+                    </text>
+                  </g>
+                );
+              })}
+            </g>
+          );
+        })()}
+      </svg>
     </div>
   );
 }
