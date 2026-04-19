@@ -19,9 +19,9 @@ const METHODS: { value: AnalysisMethod; label: string; available: boolean }[] = 
   { value: "cox_reg",      label: "Cox 回归",                 available: true  },
   { value: "psm",          label: "倾向性得分匹配（PSM）",  available: true  },
   { value: "prediction",   label: "临床预测模型",           available: true  },
-  { value: "forest_plot",  label: "亚组分析 & 森林图",      available: false },
-  { value: "rcs",          label: "RCS 曲线",               available: false },
-  { value: "threshold",    label: "阈值效应分析",           available: false },
+  { value: "forest_plot",  label: "亚组分析 & 森林图",      available: true  },
+  { value: "rcs",          label: "RCS 曲线",               available: true  },
+  { value: "threshold",    label: "阈值效应分析",           available: true  },
   { value: "mediation",    label: "中介分析",               available: false },
   { value: "sample_size",  label: "样本量计算",             available: false },
 ];
@@ -119,6 +119,34 @@ export default function AnalyzePage() {
   const [predTrainRatio, setPredTrainRatio] = useState<string>("0.7");
   const [predTimePoint, setPredTimePoint] = useState<string>("");
   const [predStepwise, setPredStepwise] = useState<boolean>(false);
+
+  // ── 亚组分析 & 森林图 params ───────────────────────────────────
+  const [fpModelType, setFpModelType] = useState<"logistic" | "cox" | "linear">("logistic");
+  const [fpOutcome, setFpOutcome] = useState<string>("");
+  const [fpTimeCol, setFpTimeCol] = useState<string>("");
+  const [fpEventCol, setFpEventCol] = useState<string>("");
+  const [fpExposure, setFpExposure] = useState<string>("");
+  const [fpCovariates, setFpCovariates] = useState<string[]>([]);
+  const [fpSubgroupVars, setFpSubgroupVars] = useState<string[]>([]);
+  const [fpCatVars, setFpCatVars] = useState<string[]>([]);
+
+  // ── RCS 曲线 params ────────────────────────────────────────────
+  const [rcsModelType, setRcsModelType] = useState<"logistic" | "cox" | "linear">("linear");
+  const [rcsOutcome, setRcsOutcome] = useState<string>("");
+  const [rcsTimeCol, setRcsTimeCol] = useState<string>("");
+  const [rcsEventCol, setRcsEventCol] = useState<string>("");
+  const [rcsExposure, setRcsExposure] = useState<string>("");
+  const [rcsCovariates, setRcsCovariates] = useState<string[]>([]);
+  const [rcsNKnots, setRcsNKnots] = useState<3 | 4 | 5>(4);
+  const [rcsRefValue, setRcsRefValue] = useState<string>("");
+
+  // ── 阈值效应 params ────────────────────────────────────────────
+  const [thrModelType, setThrModelType] = useState<"logistic" | "cox" | "linear">("linear");
+  const [thrOutcome, setThrOutcome] = useState<string>("");
+  const [thrTimeCol, setThrTimeCol] = useState<string>("");
+  const [thrEventCol, setThrEventCol] = useState<string>("");
+  const [thrExposure, setThrExposure] = useState<string>("");
+  const [thrCovariates, setThrCovariates] = useState<string[]>([]);
 
   // ── 假设检验 params ────────────────────────────────────────────
   const [testType, setTestType] = useState<"normality" | "variance" | "chi2" | "onesample">("normality");
@@ -314,6 +342,47 @@ export default function AnalyzePage() {
               ...(predTimePoint.trim() && !isNaN(tp) ? { time_point: tp } : {}),
             }),
       };
+    } else if (method === "forest_plot") {
+      if (!fpExposure) { setError("请选择暴露变量"); return; }
+      if (!fpSubgroupVars.length) { setError("请至少选择一个亚组变量"); return; }
+      if (fpModelType === "logistic" && !fpOutcome) { setError("请选择因变量"); return; }
+      if (fpModelType === "linear"   && !fpOutcome) { setError("请选择因变量"); return; }
+      if (fpModelType === "cox" && (!fpTimeCol || !fpEventCol)) { setError("请选择时间变量和事件变量"); return; }
+      params = {
+        model_type: fpModelType,
+        exposure: fpExposure,
+        covariates: fpCovariates,
+        subgroup_vars: fpSubgroupVars,
+        categorical_vars: fpCatVars,
+        ...(fpModelType !== "cox" ? { outcome: fpOutcome } : { time_col: fpTimeCol, event_col: fpEventCol }),
+      };
+    } else if (method === "rcs") {
+      if (!rcsExposure) { setError("请选择暴露变量（连续变量）"); return; }
+      if (rcsModelType === "logistic" && !rcsOutcome) { setError("请选择因变量"); return; }
+      if (rcsModelType === "linear"   && !rcsOutcome) { setError("请选择因变量"); return; }
+      if (rcsModelType === "cox" && (!rcsTimeCol || !rcsEventCol)) { setError("请选择时间变量和事件变量"); return; }
+      const refVal = parseFloat(rcsRefValue);
+      params = {
+        model_type: rcsModelType,
+        exposure: rcsExposure,
+        covariates: rcsCovariates,
+        n_knots: rcsNKnots,
+        ...(rcsModelType !== "cox" ? { outcome: rcsOutcome } : { time_col: rcsTimeCol, event_col: rcsEventCol }),
+        ...(rcsRefValue.trim() && !isNaN(refVal) ? { ref_value: refVal } : {}),
+      };
+    } else if (method === "threshold") {
+      if (!thrExposure) { setError("请选择暴露变量（连续变量）"); return; }
+      if (thrModelType === "logistic" && !thrOutcome) { setError("请选择因变量"); return; }
+      if (thrModelType === "linear"   && !thrOutcome) { setError("请选择因变量"); return; }
+      if (thrModelType === "cox" && (!thrTimeCol || !thrEventCol)) { setError("请选择时间变量和事件变量"); return; }
+      params = {
+        model_type: thrModelType,
+        exposure: thrExposure,
+        covariates: thrCovariates,
+        n_steps: 100,
+        n_bootstrap: 100,
+        ...(thrModelType !== "cox" ? { outcome: thrOutcome } : { time_col: thrTimeCol, event_col: thrEventCol }),
+      };
     } else if (method === "hypothesis") {
       params = { test_type: testType };
       if (testType === "normality") {
@@ -366,6 +435,18 @@ export default function AnalyzePage() {
     if (method === "prediction") {
       if (predModelType === "logistic") return !!predOutcome && predPredictors.length > 0;
       return !!predTimeCol && !!predEventCol && predPredictors.length > 0;
+    }
+    if (method === "forest_plot") {
+      const outOk = fpModelType === "cox" ? (!!fpTimeCol && !!fpEventCol) : !!fpOutcome;
+      return outOk && !!fpExposure && fpSubgroupVars.length > 0;
+    }
+    if (method === "rcs") {
+      const outOk = rcsModelType === "cox" ? (!!rcsTimeCol && !!rcsEventCol) : !!rcsOutcome;
+      return outOk && !!rcsExposure;
+    }
+    if (method === "threshold") {
+      const outOk = thrModelType === "cox" ? (!!thrTimeCol && !!thrEventCol) : !!thrOutcome;
+      return outOk && !!thrExposure;
     }
     if (method === "hypothesis") {
       if (testType === "normality" || testType === "onesample") return hypoVars.length > 0;
@@ -669,6 +750,62 @@ export default function AnalyzePage() {
           setTimePoint={setPredTimePoint}
           stepwise={predStepwise}
           setStepwise={setPredStepwise}
+        />
+      ) : method === "forest_plot" ? (
+        <ForestPlotConfig
+          upload={upload}
+          modelType={fpModelType}
+          setModelType={(t) => { setFpModelType(t); setFpOutcome(""); setFpTimeCol(""); setFpEventCol(""); setFpExposure(""); setFpCovariates([]); setFpSubgroupVars([]); setFpCatVars([]); }}
+          outcome={fpOutcome}
+          setOutcome={(v) => { setFpOutcome(v); setFpCovariates((c) => c.filter((x) => x !== v)); setFpSubgroupVars((s) => s.filter((x) => x !== v)); }}
+          timeCol={fpTimeCol}
+          setTimeCol={(v) => { setFpTimeCol(v); if (fpEventCol === v) setFpEventCol(""); setFpCovariates((c) => c.filter((x) => x !== v)); }}
+          eventCol={fpEventCol}
+          setEventCol={(v) => { setFpEventCol(v); if (fpTimeCol === v) setFpTimeCol(""); setFpCovariates((c) => c.filter((x) => x !== v)); }}
+          exposure={fpExposure}
+          setExposure={(v) => { setFpExposure(v); setFpCovariates((c) => c.filter((x) => x !== v)); setFpSubgroupVars((s) => s.filter((x) => x !== v)); }}
+          covariates={fpCovariates}
+          setCovariates={setFpCovariates}
+          subgroupVars={fpSubgroupVars}
+          setSubgroupVars={setFpSubgroupVars}
+          catVars={fpCatVars}
+          setCatVars={setFpCatVars}
+        />
+      ) : method === "rcs" ? (
+        <RCSConfig
+          upload={upload}
+          modelType={rcsModelType}
+          setModelType={(t) => { setRcsModelType(t); setRcsOutcome(""); setRcsTimeCol(""); setRcsEventCol(""); setRcsExposure(""); setRcsCovariates([]); }}
+          outcome={rcsOutcome}
+          setOutcome={(v) => { setRcsOutcome(v); setRcsCovariates((c) => c.filter((x) => x !== v)); if (rcsExposure === v) setRcsExposure(""); }}
+          timeCol={rcsTimeCol}
+          setTimeCol={(v) => { setRcsTimeCol(v); if (rcsEventCol === v) setRcsEventCol(""); setRcsCovariates((c) => c.filter((x) => x !== v)); }}
+          eventCol={rcsEventCol}
+          setEventCol={(v) => { setRcsEventCol(v); if (rcsTimeCol === v) setRcsTimeCol(""); setRcsCovariates((c) => c.filter((x) => x !== v)); }}
+          exposure={rcsExposure}
+          setExposure={(v) => { setRcsExposure(v); setRcsCovariates((c) => c.filter((x) => x !== v)); }}
+          covariates={rcsCovariates}
+          setCovariates={setRcsCovariates}
+          nKnots={rcsNKnots}
+          setNKnots={setRcsNKnots}
+          refValue={rcsRefValue}
+          setRefValue={setRcsRefValue}
+        />
+      ) : method === "threshold" ? (
+        <ThresholdConfig
+          upload={upload}
+          modelType={thrModelType}
+          setModelType={(t) => { setThrModelType(t); setThrOutcome(""); setThrTimeCol(""); setThrEventCol(""); setThrExposure(""); setThrCovariates([]); }}
+          outcome={thrOutcome}
+          setOutcome={(v) => { setThrOutcome(v); setThrCovariates((c) => c.filter((x) => x !== v)); if (thrExposure === v) setThrExposure(""); }}
+          timeCol={thrTimeCol}
+          setTimeCol={(v) => { setThrTimeCol(v); if (thrEventCol === v) setThrEventCol(""); setThrCovariates((c) => c.filter((x) => x !== v)); }}
+          eventCol={thrEventCol}
+          setEventCol={(v) => { setThrEventCol(v); if (thrTimeCol === v) setThrTimeCol(""); setThrCovariates((c) => c.filter((x) => x !== v)); }}
+          exposure={thrExposure}
+          setExposure={(v) => { setThrExposure(v); setThrCovariates((c) => c.filter((x) => x !== v)); }}
+          covariates={thrCovariates}
+          setCovariates={setThrCovariates}
         />
       ) : (
         /* 通用变量选择器（descriptive 及未来方法） */
@@ -2862,6 +2999,305 @@ function PredictionConfig({
           <p>验证：<span className="font-medium text-foreground">{validation === "internal_bootstrap" ? `Bootstrap (n=${nBoot})` : validation === "split" ? `Split (${Math.round(parseFloat(trainRatio) * 100)}%)` : "5-fold CV"}</span>
             {stepwise && <span className="ml-2 text-amber-600">+ 逐步筛选</span>}
           </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 亚组分析 & 森林图 配置组件
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface ForestPlotConfigProps {
+  upload: UploadResponse;
+  modelType: "logistic" | "cox" | "linear";
+  setModelType: (v: "logistic" | "cox" | "linear") => void;
+  outcome: string; setOutcome: (v: string) => void;
+  timeCol: string; setTimeCol: (v: string) => void;
+  eventCol: string; setEventCol: (v: string) => void;
+  exposure: string; setExposure: (v: string) => void;
+  covariates: string[]; setCovariates: React.Dispatch<React.SetStateAction<string[]>>;
+  subgroupVars: string[]; setSubgroupVars: React.Dispatch<React.SetStateAction<string[]>>;
+  catVars: string[]; setCatVars: React.Dispatch<React.SetStateAction<string[]>>;
+}
+
+function ForestPlotConfig({
+  upload, modelType, setModelType,
+  outcome, setOutcome, timeCol, setTimeCol, eventCol, setEventCol,
+  exposure, setExposure, covariates, setCovariates,
+  subgroupVars, setSubgroupVars, catVars, setCatVars,
+}: ForestPlotConfigProps) {
+  const cols = upload.column_names;
+  const ColSelect = ({ val, onChange, label, options }: { val: string; onChange: (v: string) => void; label: string; options: string[] }) => (
+    <div className="space-y-1">
+      <label className="text-sm font-medium">{label}</label>
+      <select value={val} onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-lg border border-border px-3 py-2 text-sm bg-background">
+        <option value="">— 请选择 —</option>
+        {options.map((o) => <option key={o} value={o}>{o}</option>)}
+      </select>
+    </div>
+  );
+  const multiToggle = (col: string, setArr: React.Dispatch<React.SetStateAction<string[]>>) =>
+    setArr((prev) => prev.includes(col) ? prev.filter((c) => c !== col) : [...prev, col]);
+
+  return (
+    <div className="space-y-5">
+      <div className="space-y-2">
+        <h2 className="font-semibold">亚组分析 & 森林图配置</h2>
+        <div className="flex gap-3">
+          {(["logistic", "cox", "linear"] as const).map((t) => (
+            <label key={t} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer ${modelType === t ? "border-primary bg-primary/5" : "border-border"}`}>
+              <input type="radio" name="fp_model" value={t} checked={modelType === t} onChange={() => setModelType(t)} className="accent-primary" />
+              {t === "logistic" ? "Logistic 回归" : t === "cox" ? "Cox 回归" : "线性回归"}
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {modelType !== "cox"
+        ? <ColSelect val={outcome} onChange={setOutcome} label="因变量（Outcome）" options={cols} />
+        : <div className="grid grid-cols-2 gap-4">
+            <ColSelect val={timeCol} onChange={setTimeCol} label="时间变量" options={cols} />
+            <ColSelect val={eventCol} onChange={setEventCol} label="事件变量（0=删失, 1=事件）" options={cols.filter((c) => c !== timeCol)} />
+          </div>}
+
+      <ColSelect val={exposure} onChange={setExposure} label="暴露变量（Exposure）"
+        options={cols.filter((c) => c !== outcome && c !== timeCol && c !== eventCol)} />
+
+      <div className="space-y-2">
+        <label className="text-sm font-medium">协变量（调整用，多选）</label>
+        <div className="grid grid-cols-3 gap-2">
+          {cols.filter((c) => c !== outcome && c !== timeCol && c !== eventCol && c !== exposure).map((c) => (
+            <label key={c} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm cursor-pointer ${covariates.includes(c) ? "border-primary bg-primary/5" : "border-border"}`}>
+              <input type="checkbox" checked={covariates.includes(c)} onChange={() => multiToggle(c, setCovariates)} className="accent-primary" />
+              <span className="truncate">{c}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <label className="text-sm font-medium">亚组变量（多选）</label>
+        <div className="grid grid-cols-3 gap-2">
+          {cols.filter((c) => c !== exposure && c !== outcome && c !== timeCol && c !== eventCol).map((c) => (
+            <label key={c} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm cursor-pointer ${subgroupVars.includes(c) ? "border-primary bg-primary/5" : "border-border"}`}>
+              <input type="checkbox" checked={subgroupVars.includes(c)} onChange={() => multiToggle(c, setSubgroupVars)} className="accent-primary" />
+              <span className="truncate">{c}</span>
+            </label>
+          ))}
+        </div>
+        <p className="text-xs text-muted-foreground">数值变量自动按中位数分为高/低两组；勾选「分类变量」后按实际类别分层</p>
+      </div>
+
+      {subgroupVars.length > 0 && (
+        <div className="space-y-2">
+          <label className="text-sm font-medium">标记为分类亚组变量（按实际类别分层）</label>
+          <div className="flex flex-wrap gap-2">
+            {subgroupVars.map((c) => (
+              <label key={c} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm cursor-pointer ${catVars.includes(c) ? "border-primary bg-primary/5" : "border-border"}`}>
+                <input type="checkbox" checked={catVars.includes(c)} onChange={() => multiToggle(c, setCatVars)} className="accent-primary" />
+                <span>{c}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {exposure && subgroupVars.length > 0 && (
+        <div className="rounded-lg bg-muted/40 border border-border px-4 py-3 text-xs text-muted-foreground space-y-1">
+          <p>模型：<span className="font-medium text-foreground">{modelType}</span> · 暴露：<span className="font-medium text-foreground">{exposure}</span></p>
+          <p>亚组变量（{subgroupVars.length}）：<span className="font-medium text-foreground">{subgroupVars.join("、")}</span></p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RCS 曲线配置组件
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface RCSConfigProps {
+  upload: UploadResponse;
+  modelType: "logistic" | "cox" | "linear";
+  setModelType: (v: "logistic" | "cox" | "linear") => void;
+  outcome: string; setOutcome: (v: string) => void;
+  timeCol: string; setTimeCol: (v: string) => void;
+  eventCol: string; setEventCol: (v: string) => void;
+  exposure: string; setExposure: (v: string) => void;
+  covariates: string[]; setCovariates: React.Dispatch<React.SetStateAction<string[]>>;
+  nKnots: 3 | 4 | 5; setNKnots: (v: 3 | 4 | 5) => void;
+  refValue: string; setRefValue: (v: string) => void;
+}
+
+function RCSConfig({
+  upload, modelType, setModelType,
+  outcome, setOutcome, timeCol, setTimeCol, eventCol, setEventCol,
+  exposure, setExposure, covariates, setCovariates,
+  nKnots, setNKnots, refValue, setRefValue,
+}: RCSConfigProps) {
+  const cols = upload.column_names;
+  const ColSelect = ({ val, onChange, label, options }: { val: string; onChange: (v: string) => void; label: string; options: string[] }) => (
+    <div className="space-y-1">
+      <label className="text-sm font-medium">{label}</label>
+      <select value={val} onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-lg border border-border px-3 py-2 text-sm bg-background">
+        <option value="">— 请选择 —</option>
+        {options.map((o) => <option key={o} value={o}>{o}</option>)}
+      </select>
+    </div>
+  );
+  const multiToggle = (col: string, setArr: React.Dispatch<React.SetStateAction<string[]>>) =>
+    setArr((prev) => prev.includes(col) ? prev.filter((c) => c !== col) : [...prev, col]);
+
+  return (
+    <div className="space-y-5">
+      <div className="space-y-2">
+        <h2 className="font-semibold">RCS 曲线配置</h2>
+        <div className="flex gap-3">
+          {(["logistic", "cox", "linear"] as const).map((t) => (
+            <label key={t} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer ${modelType === t ? "border-primary bg-primary/5" : "border-border"}`}>
+              <input type="radio" name="rcs_model" value={t} checked={modelType === t} onChange={() => setModelType(t)} className="accent-primary" />
+              {t === "logistic" ? "Logistic" : t === "cox" ? "Cox" : "线性"}
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {modelType !== "cox"
+        ? <ColSelect val={outcome} onChange={setOutcome} label="因变量" options={cols} />
+        : <div className="grid grid-cols-2 gap-4">
+            <ColSelect val={timeCol} onChange={setTimeCol} label="时间变量" options={cols} />
+            <ColSelect val={eventCol} onChange={setEventCol} label="事件变量" options={cols.filter((c) => c !== timeCol)} />
+          </div>}
+
+      <ColSelect val={exposure} onChange={setExposure} label="暴露变量（连续变量）"
+        options={cols.filter((c) => c !== outcome && c !== timeCol && c !== eventCol)} />
+
+      <div className="space-y-2">
+        <label className="text-sm font-medium">协变量（多选）</label>
+        <div className="grid grid-cols-3 gap-2">
+          {cols.filter((c) => c !== outcome && c !== timeCol && c !== eventCol && c !== exposure).map((c) => (
+            <label key={c} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm cursor-pointer ${covariates.includes(c) ? "border-primary bg-primary/5" : "border-border"}`}>
+              <input type="checkbox" checked={covariates.includes(c)} onChange={() => multiToggle(c, setCovariates)} className="accent-primary" />
+              <span className="truncate">{c}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <label className="text-sm font-medium">节点数（Knots）</label>
+          <div className="flex gap-2">
+            {([3, 4, 5] as const).map((n) => (
+              <label key={n} className={`flex items-center gap-1.5 px-4 py-2 rounded-lg border text-sm cursor-pointer ${nKnots === n ? "border-primary bg-primary/5 font-semibold" : "border-border"}`}>
+                <input type="radio" name="rcs_knots" value={n} checked={nKnots === n} onChange={() => setNKnots(n)} className="accent-primary" />
+                {n}
+              </label>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">默认 4 节点（Harrell 推荐）</p>
+        </div>
+        <div className="space-y-1">
+          <label className="text-sm font-medium">参考值（留空则用中位数）</label>
+          <input type="number" step="any" value={refValue} onChange={(e) => setRefValue(e.target.value)}
+            placeholder="例如：25"
+            className="w-full rounded-lg border border-border px-3 py-2 text-sm bg-background" />
+        </div>
+      </div>
+
+      {exposure && (
+        <div className="rounded-lg bg-muted/40 border border-border px-4 py-3 text-xs text-muted-foreground space-y-1">
+          <p>模型：<span className="font-medium text-foreground">{modelType}</span> · 暴露：<span className="font-medium text-foreground">{exposure}</span> · 节点数：<span className="font-medium text-foreground">{nKnots}</span></p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 阈值效应分析配置组件
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface ThresholdConfigProps {
+  upload: UploadResponse;
+  modelType: "logistic" | "cox" | "linear";
+  setModelType: (v: "logistic" | "cox" | "linear") => void;
+  outcome: string; setOutcome: (v: string) => void;
+  timeCol: string; setTimeCol: (v: string) => void;
+  eventCol: string; setEventCol: (v: string) => void;
+  exposure: string; setExposure: (v: string) => void;
+  covariates: string[]; setCovariates: React.Dispatch<React.SetStateAction<string[]>>;
+}
+
+function ThresholdConfig({
+  upload, modelType, setModelType,
+  outcome, setOutcome, timeCol, setTimeCol, eventCol, setEventCol,
+  exposure, setExposure, covariates, setCovariates,
+}: ThresholdConfigProps) {
+  const cols = upload.column_names;
+  const ColSelect = ({ val, onChange, label, options }: { val: string; onChange: (v: string) => void; label: string; options: string[] }) => (
+    <div className="space-y-1">
+      <label className="text-sm font-medium">{label}</label>
+      <select value={val} onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-lg border border-border px-3 py-2 text-sm bg-background">
+        <option value="">— 请选择 —</option>
+        {options.map((o) => <option key={o} value={o}>{o}</option>)}
+      </select>
+    </div>
+  );
+  const multiToggle = (col: string, setArr: React.Dispatch<React.SetStateAction<string[]>>) =>
+    setArr((prev) => prev.includes(col) ? prev.filter((c) => c !== col) : [...prev, col]);
+
+  return (
+    <div className="space-y-5">
+      <div className="space-y-2">
+        <h2 className="font-semibold">阈值效应分析配置</h2>
+        <p className="text-xs text-muted-foreground">分段线性回归自动搜索最佳拐点，Bootstrap 估计置信区间</p>
+        <div className="flex gap-3">
+          {(["logistic", "cox", "linear"] as const).map((t) => (
+            <label key={t} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer ${modelType === t ? "border-primary bg-primary/5" : "border-border"}`}>
+              <input type="radio" name="thr_model" value={t} checked={modelType === t} onChange={() => setModelType(t)} className="accent-primary" />
+              {t === "logistic" ? "Logistic" : t === "cox" ? "Cox" : "线性"}
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {modelType !== "cox"
+        ? <ColSelect val={outcome} onChange={setOutcome} label="因变量" options={cols} />
+        : <div className="grid grid-cols-2 gap-4">
+            <ColSelect val={timeCol} onChange={setTimeCol} label="时间变量" options={cols} />
+            <ColSelect val={eventCol} onChange={setEventCol} label="事件变量" options={cols.filter((c) => c !== timeCol)} />
+          </div>}
+
+      <ColSelect val={exposure} onChange={setExposure} label="暴露变量（连续变量）"
+        options={cols.filter((c) => c !== outcome && c !== timeCol && c !== eventCol)} />
+
+      <div className="space-y-2">
+        <label className="text-sm font-medium">协变量（多选）</label>
+        <div className="grid grid-cols-3 gap-2">
+          {cols.filter((c) => c !== outcome && c !== timeCol && c !== eventCol && c !== exposure).map((c) => (
+            <label key={c} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm cursor-pointer ${covariates.includes(c) ? "border-primary bg-primary/5" : "border-border"}`}>
+              <input type="checkbox" checked={covariates.includes(c)} onChange={() => multiToggle(c, setCovariates)} className="accent-primary" />
+              <span className="truncate">{c}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-xs text-amber-700">
+        <p className="font-medium">⏱ 计算时间提示</p>
+        <p className="mt-0.5">搜索 100 个候选拐点 + 100 次 Bootstrap，大样本约需 30–60 秒。</p>
+      </div>
+
+      {exposure && (
+        <div className="rounded-lg bg-muted/40 border border-border px-4 py-3 text-xs text-muted-foreground space-y-1">
+          <p>模型：<span className="font-medium text-foreground">{modelType}</span> · 暴露：<span className="font-medium text-foreground">{exposure}</span></p>
+          {covariates.length > 0 && <p>协变量：<span className="font-medium text-foreground">{covariates.join("、")}</span></p>}
         </div>
       )}
     </div>
