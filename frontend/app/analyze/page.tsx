@@ -18,7 +18,7 @@ const METHODS: { value: AnalysisMethod; label: string; available: boolean }[] = 
   { value: "survival",     label: "生存分析（Kaplan-Meier）",  available: true  },
   { value: "cox_reg",      label: "Cox 回归",                 available: true  },
   { value: "psm",          label: "倾向性得分匹配（PSM）",  available: true  },
-  { value: "prediction",   label: "临床预测模型",           available: false },
+  { value: "prediction",   label: "临床预测模型",           available: true  },
   { value: "forest_plot",  label: "亚组分析 & 森林图",      available: false },
   { value: "rcs",          label: "RCS 曲线",               available: false },
   { value: "threshold",    label: "阈值效应分析",           available: false },
@@ -105,6 +105,20 @@ export default function AnalyzePage() {
   const [psmCaliper, setPsmCaliper] = useState<string>("");
   const [psmRatio, setPsmRatio] = useState<1 | 2 | 3>(1);
   const [psmWithReplacement, setPsmWithReplacement] = useState<boolean>(false);
+
+  // ── 临床预测模型 params ────────────────────────────────────────
+  const [predModelType, setPredModelType] = useState<"logistic" | "cox">("logistic");
+  const [predOutcome, setPredOutcome] = useState<string>("");
+  const [predTimeCol, setPredTimeCol] = useState<string>("");
+  const [predEventCol, setPredEventCol] = useState<string>("");
+  const [predPredictors, setPredPredictors] = useState<string[]>([]);
+  const [predCatVars, setPredCatVars] = useState<string[]>([]);
+  const [predRefCats, setPredRefCats] = useState<Record<string, string>>({});
+  const [predValidation, setPredValidation] = useState<"internal_bootstrap" | "split" | "cross_validation">("internal_bootstrap");
+  const [predNBoot, setPredNBoot] = useState<string>("1000");
+  const [predTrainRatio, setPredTrainRatio] = useState<string>("0.7");
+  const [predTimePoint, setPredTimePoint] = useState<string>("");
+  const [predStepwise, setPredStepwise] = useState<boolean>(false);
 
   // ── 假设检验 params ────────────────────────────────────────────
   const [testType, setTestType] = useState<"normality" | "variance" | "chi2" | "onesample">("normality");
@@ -271,6 +285,35 @@ export default function AnalyzePage() {
         ...(psmOutcomeType === "survival" ? { time_col: psmTimeCol, event_col: psmEventCol } : {}),
         ...(psmCaliper.trim() ? { caliper: parseFloat(psmCaliper) } : {}),
       };
+    } else if (method === "prediction") {
+      if (predModelType === "logistic") {
+        if (!predOutcome) { setError("请选择因变量"); return; }
+        if (!predPredictors.length) { setError("请至少选择一个预测因子"); return; }
+      } else {
+        if (!predTimeCol) { setError("请选择时间变量"); return; }
+        if (!predEventCol) { setError("请选择事件变量"); return; }
+        if (!predPredictors.length) { setError("请至少选择一个预测因子"); return; }
+      }
+      const nBoot = parseInt(predNBoot, 10);
+      const trainR = parseFloat(predTrainRatio);
+      const tp = parseFloat(predTimePoint);
+      params = {
+        model_type: predModelType,
+        predictors: predPredictors,
+        categorical_vars: predCatVars,
+        ref_categories: predRefCats,
+        validation: predValidation,
+        n_bootstrap: isNaN(nBoot) ? 1000 : nBoot,
+        train_ratio: isNaN(trainR) ? 0.7 : trainR,
+        stepwise: predStepwise,
+        ...(predModelType === "logistic"
+          ? { outcome: predOutcome }
+          : {
+              time_col: predTimeCol,
+              event_col: predEventCol,
+              ...(predTimePoint.trim() && !isNaN(tp) ? { time_point: tp } : {}),
+            }),
+      };
     } else if (method === "hypothesis") {
       params = { test_type: testType };
       if (testType === "normality") {
@@ -319,6 +362,10 @@ export default function AnalyzePage() {
     if (method === "psm") {
       const survOk = psmOutcomeType !== "survival" || (!!psmTimeCol && !!psmEventCol);
       return !!psmTreatCol && psmCovariates.length > 0 && survOk;
+    }
+    if (method === "prediction") {
+      if (predModelType === "logistic") return !!predOutcome && predPredictors.length > 0;
+      return !!predTimeCol && !!predEventCol && predPredictors.length > 0;
     }
     if (method === "hypothesis") {
       if (testType === "normality" || testType === "onesample") return hypoVars.length > 0;
@@ -590,6 +637,38 @@ export default function AnalyzePage() {
           setRatio={setPsmRatio}
           withReplacement={psmWithReplacement}
           setWithReplacement={setPsmWithReplacement}
+        />
+      ) : method === "prediction" ? (
+        <PredictionConfig
+          upload={upload}
+          modelType={predModelType}
+          setModelType={(t) => {
+            setPredModelType(t);
+            setPredOutcome(""); setPredTimeCol(""); setPredEventCol("");
+            setPredPredictors([]); setPredCatVars([]); setPredRefCats({});
+          }}
+          outcome={predOutcome}
+          setOutcome={(v) => { setPredOutcome(v); setPredPredictors((p) => p.filter((c) => c !== v)); }}
+          timeCol={predTimeCol}
+          setTimeCol={(v) => { setPredTimeCol(v); setPredPredictors((p) => p.filter((c) => c !== v)); if (predEventCol === v) setPredEventCol(""); }}
+          eventCol={predEventCol}
+          setEventCol={(v) => { setPredEventCol(v); setPredPredictors((p) => p.filter((c) => c !== v)); if (predTimeCol === v) setPredTimeCol(""); }}
+          predictors={predPredictors}
+          setPredictors={(preds) => { setPredPredictors(preds); setPredCatVars((c) => c.filter((x) => preds.includes(x))); }}
+          catVars={predCatVars}
+          setCatVars={setPredCatVars}
+          refCats={predRefCats}
+          setRefCats={setPredRefCats}
+          validation={predValidation}
+          setValidation={setPredValidation}
+          nBoot={predNBoot}
+          setNBoot={setPredNBoot}
+          trainRatio={predTrainRatio}
+          setTrainRatio={setPredTrainRatio}
+          timePoint={predTimePoint}
+          setTimePoint={setPredTimePoint}
+          stepwise={predStepwise}
+          setStepwise={setPredStepwise}
         />
       ) : (
         /* 通用变量选择器（descriptive 及未来方法） */
@@ -2499,6 +2578,290 @@ function PSMConfig({
           {outcomeCol && <p>结局变量：<span className="font-medium text-foreground">{outcomeCol}（{OUTCOME_TYPES.find((o) => o.value === outcomeType)?.label}）</span></p>}
           {outcomeType === "survival" && <p>时间 / 事件：<span className="font-medium text-foreground">{timeCol || "—"} / {eventCol || "—"}</span></p>}
           <p>匹配：<span className="font-medium text-foreground">{METHODS.find((m) => m.value === method)?.label} · 1:{ratio} · {withReplacement ? "放回" : "不放回"}</span></p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 临床预测模型配置组件
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface PredictionConfigProps {
+  upload: UploadResponse;
+  modelType: "logistic" | "cox";
+  setModelType: (t: "logistic" | "cox") => void;
+  outcome: string;
+  setOutcome: (v: string) => void;
+  timeCol: string;
+  setTimeCol: (v: string) => void;
+  eventCol: string;
+  setEventCol: (v: string) => void;
+  predictors: string[];
+  setPredictors: (p: string[]) => void;
+  catVars: string[];
+  setCatVars: (v: string[]) => void;
+  refCats: Record<string, string>;
+  setRefCats: (r: Record<string, string>) => void;
+  validation: "internal_bootstrap" | "split" | "cross_validation";
+  setValidation: (v: "internal_bootstrap" | "split" | "cross_validation") => void;
+  nBoot: string;
+  setNBoot: (v: string) => void;
+  trainRatio: string;
+  setTrainRatio: (v: string) => void;
+  timePoint: string;
+  setTimePoint: (v: string) => void;
+  stepwise: boolean;
+  setStepwise: (v: boolean) => void;
+}
+
+function PredictionConfig({
+  upload,
+  modelType, setModelType,
+  outcome, setOutcome,
+  timeCol, setTimeCol,
+  eventCol, setEventCol,
+  predictors, setPredictors,
+  catVars, setCatVars,
+  refCats, setRefCats,
+  validation, setValidation,
+  nBoot, setNBoot,
+  trainRatio, setTrainRatio,
+  timePoint, setTimePoint,
+  stepwise, setStepwise,
+}: PredictionConfigProps) {
+  const cols = upload.column_names;
+
+  const usedCols = modelType === "logistic"
+    ? [outcome]
+    : [timeCol, eventCol];
+  const availablePredictors = cols.filter((c) => !usedCols.includes(c) || predictors.includes(c));
+
+  const togglePredictor = (col: string) =>
+    setPredictors(
+      predictors.includes(col) ? predictors.filter((c) => c !== col) : [...predictors, col]
+    );
+
+  const toggleCatVar = (col: string) =>
+    setCatVars(
+      catVars.includes(col) ? catVars.filter((c) => c !== col) : [...catVars, col]
+    );
+
+  return (
+    <div className="space-y-6">
+
+      {/* ── 模型类型 ── */}
+      <section className="space-y-3">
+        <h2 className="font-semibold">模型类型</h2>
+        <div className="flex gap-3">
+          {(["logistic", "cox"] as const).map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setModelType(t)}
+              className={`px-4 py-2 rounded-lg border text-sm transition-colors ${
+                modelType === t ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"
+              }`}
+            >
+              {t === "logistic" ? "Logistic 回归（二分类结局）" : "Cox 回归（生存结局）"}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* ── 结局变量（Logistic） ── */}
+      {modelType === "logistic" && (
+        <section className="space-y-3">
+          <div>
+            <h2 className="font-semibold">因变量 <span className="text-destructive text-xs font-normal">必选，二分类</span></h2>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+            {cols.map((col) => (
+              <label key={col} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${outcome === col ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"}`}>
+                <input type="radio" name="pred_outcome" value={col} checked={outcome === col} onChange={() => setOutcome(col)} className="accent-primary" />
+                <span className="truncate" title={col}>{col}</span>
+              </label>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* ── 时间 + 事件变量（Cox） ── */}
+      {modelType === "cox" && (
+        <section className="space-y-4">
+          <div>
+            <h2 className="font-semibold">时间 & 事件变量 <span className="text-destructive text-xs font-normal">必选</span></h2>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-muted-foreground">时间变量</p>
+              <div className="grid grid-cols-2 gap-1.5">
+                {cols.map((col) => (
+                  <label key={col} className={`flex items-center gap-2 px-2 py-1.5 rounded-md border text-xs cursor-pointer ${timeCol === col ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"}`}>
+                    <input type="radio" name="pred_time" value={col} checked={timeCol === col} onChange={() => setTimeCol(col)} className="accent-primary" />
+                    <span className="truncate" title={col}>{col}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-muted-foreground">事件变量（0=删失，1=事件）</p>
+              <div className="grid grid-cols-2 gap-1.5">
+                {cols.map((col) => (
+                  <label key={col} className={`flex items-center gap-2 px-2 py-1.5 rounded-md border text-xs cursor-pointer ${eventCol === col ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"}`}>
+                    <input type="radio" name="pred_event" value={col} checked={eventCol === col} onChange={() => setEventCol(col)} className="accent-primary" />
+                    <span className="truncate" title={col}>{col}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <label className="text-sm text-muted-foreground whitespace-nowrap">预测时间点</label>
+            <input
+              type="number"
+              placeholder="如 365（天）"
+              value={timePoint}
+              onChange={(e) => setTimePoint(e.target.value)}
+              className="w-40 px-3 py-1.5 border border-border rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+            <span className="text-xs text-muted-foreground">留空则使用时间中位数</span>
+          </div>
+        </section>
+      )}
+
+      {/* ── 预测因子 ── */}
+      <section className="space-y-3">
+        <div>
+          <h2 className="font-semibold">预测因子 <span className="text-destructive text-xs font-normal">必选，可多选</span></h2>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+          {availablePredictors.filter((c) => !usedCols.includes(c)).map((col) => (
+            <label key={col} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${predictors.includes(col) ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"}`}>
+              <input type="checkbox" checked={predictors.includes(col)} onChange={() => togglePredictor(col)} className="accent-primary" />
+              <span className="truncate" title={col}>{col}</span>
+            </label>
+          ))}
+        </div>
+        {predictors.length > 0 && <p className="text-xs text-muted-foreground">已选 {predictors.length} 个预测因子</p>}
+      </section>
+
+      {/* ── 分类变量标记 ── */}
+      {predictors.length > 0 && (
+        <section className="space-y-3">
+          <div>
+            <h2 className="font-semibold">分类变量标记 <span className="text-muted-foreground text-xs font-normal">可选</span></h2>
+            <p className="text-xs text-muted-foreground mt-0.5">标记后自动 dummy 编码；可指定参考组</p>
+          </div>
+          <div className="space-y-2">
+            {predictors.map((col) => (
+              <div key={col} className="flex items-center gap-3">
+                <label className="flex items-center gap-2 text-sm cursor-pointer min-w-[140px]">
+                  <input
+                    type="checkbox"
+                    checked={catVars.includes(col)}
+                    onChange={() => toggleCatVar(col)}
+                    className="accent-amber-500"
+                  />
+                  <span className={catVars.includes(col) ? "font-medium text-amber-700" : ""}>{col}</span>
+                </label>
+                {catVars.includes(col) && (
+                  <input
+                    type="text"
+                    placeholder="参考组（留空=默认）"
+                    value={refCats[col] ?? ""}
+                    onChange={(e) =>
+                      setRefCats({ ...refCats, [col]: e.target.value })
+                    }
+                    className="flex-1 max-w-[180px] px-2 py-1 border border-border rounded-md text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* ── 验证方式 ── */}
+      <section className="space-y-3">
+        <h2 className="font-semibold">内部验证方式</h2>
+        <div className="flex flex-wrap gap-2">
+          {[
+            { value: "internal_bootstrap" as const, label: "Bootstrap 验证", desc: "Harrell 校正法" },
+            { value: "split"              as const, label: "Split 验证",      desc: "训练集 / 测试集" },
+            { value: "cross_validation"   as const, label: "5-fold 交叉验证", desc: "K-fold CV" },
+          ].map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => setValidation(opt.value)}
+              className={`px-3 py-1.5 rounded-lg border text-sm transition-colors ${
+                validation === opt.value ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"
+              }`}
+            >
+              {opt.label}
+              <span className="text-xs text-muted-foreground ml-1.5">({opt.desc})</span>
+            </button>
+          ))}
+        </div>
+
+        {validation === "internal_bootstrap" && (
+          <div className="flex items-center gap-3">
+            <label className="text-sm text-muted-foreground">Bootstrap 次数</label>
+            <input
+              type="number"
+              value={nBoot}
+              onChange={(e) => setNBoot(e.target.value)}
+              min={100}
+              max={5000}
+              className="w-28 px-3 py-1.5 border border-border rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+          </div>
+        )}
+        {validation === "split" && (
+          <div className="flex items-center gap-3">
+            <label className="text-sm text-muted-foreground">训练集比例</label>
+            <input
+              type="number"
+              value={trainRatio}
+              onChange={(e) => setTrainRatio(e.target.value)}
+              min={0.5}
+              max={0.9}
+              step={0.05}
+              className="w-28 px-3 py-1.5 border border-border rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+          </div>
+        )}
+      </section>
+
+      {/* ── 逐步变量筛选 ── */}
+      <section className="space-y-2">
+        <label className="flex items-center gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={stepwise}
+            onChange={(e) => setStepwise(e.target.checked)}
+            className="accent-primary w-4 h-4"
+          />
+          <div>
+            <span className="font-semibold text-sm">向后逐步变量筛选（AIC-based）</span>
+            <p className="text-xs text-muted-foreground">自动移除不显著变量，可能延长计算时间</p>
+          </div>
+        </label>
+      </section>
+
+      {/* 配置预览 */}
+      {predictors.length > 0 && (
+        <div className="rounded-lg bg-muted/40 border border-border px-4 py-3 text-xs text-muted-foreground space-y-1">
+          <p>模型类型：<span className="font-medium text-foreground">{modelType === "logistic" ? "Logistic 回归" : "Cox 回归"}</span></p>
+          {modelType === "logistic" && outcome && <p>因变量：<span className="font-medium text-foreground">{outcome}</span></p>}
+          {modelType === "cox" && <p>时间 / 事件：<span className="font-medium text-foreground">{timeCol || "—"} / {eventCol || "—"}{timePoint ? `  · 预测时间点：${timePoint}` : ""}</span></p>}
+          <p>预测因子（{predictors.length}）：<span className="font-medium text-foreground">{predictors.join("、")}</span></p>
+          {catVars.length > 0 && <p>分类变量：<span className="font-medium text-foreground">{catVars.join("、")}</span></p>}
+          <p>验证：<span className="font-medium text-foreground">{validation === "internal_bootstrap" ? `Bootstrap (n=${nBoot})` : validation === "split" ? `Split (${Math.round(parseFloat(trainRatio) * 100)}%)` : "5-fold CV"}</span>
+            {stepwise && <span className="ml-2 text-amber-600">+ 逐步筛选</span>}
+          </p>
         </div>
       )}
     </div>
