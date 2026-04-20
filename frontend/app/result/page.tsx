@@ -24,6 +24,9 @@ const METHOD_LABELS: Record<string, string> = {
   cox_reg:              "Cox 比例风险回归",
   psm:                  "倾向性得分匹配（PSM）",
   prediction:           "临床预测模型",
+  forest_plot:          "亚组分析 & 森林图",
+  rcs:                  "RCS 曲线（限制性立方样条）",
+  threshold:            "阈值效应分析",
 };
 
 export default function ResultPage() {
@@ -196,6 +199,15 @@ export default function ResultPage() {
           ) : result.method === "prediction" ? (
             /* 临床预测模型：Nomogram 全宽 → ROC/校准并排 → DCA 全宽 → Bootstrap 直方图 */
             <PredictionCharts charts={result.charts} />
+          ) : result.method === "forest_plot" ? (
+            /* 亚组分析森林图：全宽展示 */
+            <ForestPlotCharts charts={result.charts} />
+          ) : result.method === "rcs" ? (
+            /* RCS 曲线：全宽，含 rug plot + 直方图 */
+            <RCSCharts charts={result.charts} />
+          ) : result.method === "threshold" ? (
+            /* 阈值效应：全宽效应图 + 对数似然曲线（可折叠） */
+            <ThresholdCharts charts={result.charts} />
           ) : (
             /* 其他方法（差异性分析、线性回归等）：两列并排 */
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1061,6 +1073,128 @@ function NomogramChart({ data }: { data?: NomogramData }) {
           );
         })()}
       </svg>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 亚组分析 & 森林图 图表布局
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ForestPlotCharts({ charts }: { charts: ChartResult[] }) {
+  const forestCharts = charts.filter((c) => c.chart_type === "forest_plot");
+  const otherCharts  = charts.filter((c) => c.chart_type !== "forest_plot");
+
+  return (
+    <div className="space-y-6">
+      {forestCharts.map((chart, i) => {
+        const rowCount = (chart.option.forestData as unknown[])?.length ?? 4;
+        return (
+          <div key={i} className="rounded-xl border border-border p-4">
+            <p className="text-sm font-semibold text-muted-foreground mb-2">{chart.title}</p>
+            <ForestPlot
+              option={chart.option}
+              height={Math.max(400, rowCount * 48 + 100)}
+            />
+          </div>
+        );
+      })}
+      {/* 其他辅助图表（如有） */}
+      {otherCharts.map((chart, i) => (
+        <div key={i} className="rounded-xl border border-border p-4">
+          <EChartsRenderer option={chart.option} height={320} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RCS 曲线 图表布局
+// ─────────────────────────────────────────────────────────────────────────────
+
+function RCSCharts({ charts }: { charts: ChartResult[] }) {
+  const [histOpen, setHistOpen] = useState(false);
+  const rcsCurve = charts.find((c) => c.title.includes("RCS") || c.title.includes("曲线"));
+  const histChart = charts.find((c) => c.chart_type === "bar" && c.title.includes("分布"));
+
+  return (
+    <div className="space-y-6">
+      {/* RCS 主曲线全宽 */}
+      {rcsCurve && (
+        <div className="rounded-xl border border-border p-4">
+          <p className="text-sm font-semibold text-muted-foreground mb-2">{rcsCurve.title}</p>
+          <EChartsRenderer option={rcsCurve.option} height={460} />
+        </div>
+      )}
+      {/* 其余 line/scatter 图 */}
+      {charts.filter((c) => c !== rcsCurve && c !== histChart).map((chart, i) => (
+        <div key={i} className="rounded-xl border border-border p-4">
+          <EChartsRenderer option={chart.option} height={320} />
+        </div>
+      ))}
+      {/* 分布直方图可折叠 */}
+      {histChart && (
+        <div className="rounded-xl border border-border">
+          <button
+            onClick={() => setHistOpen((o) => !o)}
+            className="w-full flex items-center gap-2 px-4 py-3 text-sm font-semibold hover:bg-muted/30 transition-colors rounded-xl"
+          >
+            <span>{histOpen ? "▾" : "▸"}</span>
+            <span>暴露变量分布直方图（辅助参考）</span>
+          </button>
+          {histOpen && (
+            <div className="px-4 pb-4">
+              <EChartsRenderer option={histChart.option} height={260} />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 阈值效应 图表布局
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ThresholdCharts({ charts }: { charts: ChartResult[] }) {
+  const [llOpen, setLlOpen] = useState(false);
+  const effectChart = charts.find((c) => c.title.includes("阈值") || c.title.includes("效应"));
+  const llChart     = charts.find((c) => c.title.includes("对数似然") || c.title.includes("似然曲线"));
+
+  return (
+    <div className="space-y-6">
+      {/* 阈值效应主图全宽 */}
+      {effectChart && (
+        <div className="rounded-xl border border-border p-4">
+          <p className="text-sm font-semibold text-muted-foreground mb-2">{effectChart.title}</p>
+          <EChartsRenderer option={effectChart.option} height={440} />
+        </div>
+      )}
+      {/* 其余图表（若有） */}
+      {charts.filter((c) => c !== effectChart && c !== llChart).map((chart, i) => (
+        <div key={i} className="rounded-xl border border-border p-4">
+          <EChartsRenderer option={chart.option} height={320} />
+        </div>
+      ))}
+      {/* 对数似然曲线可折叠 */}
+      {llChart && (
+        <div className="rounded-xl border border-border">
+          <button
+            onClick={() => setLlOpen((o) => !o)}
+            className="w-full flex items-center gap-2 px-4 py-3 text-sm font-semibold hover:bg-muted/30 transition-colors rounded-xl"
+          >
+            <span>{llOpen ? "▾" : "▸"}</span>
+            <span>对数似然曲线（候选拐点搜索过程）</span>
+          </button>
+          {llOpen && (
+            <div className="px-4 pb-4">
+              <EChartsRenderer option={llChart.option} height={300} />
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

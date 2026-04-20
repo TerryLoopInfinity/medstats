@@ -5,6 +5,7 @@ from app.api.routes import (
     correlation,
     cox_reg,
     descriptive,
+    forest_plot,
     hypothesis,
     linear_reg,
     linear_reg_adjusted,
@@ -12,8 +13,10 @@ from app.api.routes import (
     logistic_reg_adjusted,
     prediction,
     psm,
+    rcs,
     survival,
     table_one,
+    threshold,
     ttest,
 )
 
@@ -32,3 +35,6 @@ router.include_router(survival.router, prefix="/survival")
 router.include_router(cox_reg.router, prefix="/cox_reg")
 router.include_router(psm.router, prefix="/psm")
 router.include_router(prediction.router, prefix="/prediction")
+router.include_router(forest_plot.router, prefix="/forest_plot")
+router.include_router(rcs.router, prefix="/rcs")
+router.include_router(threshold.router, prefix="/threshold")
