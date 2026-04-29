@@ -27,6 +27,8 @@ const METHOD_LABELS: Record<string, string> = {
   forest_plot:          "亚组分析 & 森林图",
   rcs:                  "RCS 曲线（限制性立方样条）",
   threshold:            "阈值效应分析",
+  mediation:            "中介分析",
+  sample_size:          "在线样本量计算",
 };
 
 export default function ResultPage() {
@@ -111,6 +113,8 @@ export default function ResultPage() {
           ? <SurvivalCoxTables result={result} />
           : result.method === "psm"
           ? <PSMTables result={result} />
+          : result.method === "sample_size"
+          ? <SampleSizeTables result={result} />
           : result.tables.map((t) => (
               <ResultTable
                 key={t.title}
@@ -208,6 +212,18 @@ export default function ResultPage() {
           ) : result.method === "threshold" ? (
             /* 阈值效应：全宽效应图 + 对数似然曲线（可折叠） */
             <ThresholdCharts charts={result.charts} />
+          ) : result.method === "mediation" ? (
+            /* 中介分析：路径图全宽 → Bootstrap 分布 + 饼图并排 */
+            <MediationCharts charts={result.charts} />
+          ) : result.method === "sample_size" ? (
+            /* 样本量计算：功效曲线全宽 */
+            <div className="space-y-6">
+              {result.charts.map((chart, i) => (
+                <div key={i} className="rounded-xl border border-border p-4">
+                  <EChartsRenderer option={chart.option} height={420} />
+                </div>
+              ))}
+            </div>
           ) : (
             /* 其他方法（差异性分析、线性回归等）：两列并排 */
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1193,6 +1209,273 @@ function ThresholdCharts({ charts }: { charts: ChartResult[] }) {
               <EChartsRenderer option={llChart.option} height={300} />
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 中介分析图表布局
+// 路径图全宽 → Bootstrap 分布 + 饼图并排
+// ─────────────────────────────────────────────────────────────────────────────
+
+function MediationCharts({ charts }: { charts: ChartResult[] }) {
+  const pathChart = charts.find((c) => c.chart_type === "mediation_path");
+  const histChart = charts.find((c) => c.chart_type === "bar");
+  const pieChart  = charts.find((c) => c.chart_type === "pie");
+
+  return (
+    <div className="space-y-6">
+      {/* 路径图全宽（最核心） */}
+      {pathChart && (
+        <div className="rounded-xl border border-border p-6">
+          <p className="text-sm font-semibold text-muted-foreground mb-4">{pathChart.title}</p>
+          <MediationPathDiagram option={pathChart.option} />
+        </div>
+      )}
+      {/* Bootstrap 直方图 + 饼图并排 */}
+      {(histChart || pieChart) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {histChart && (
+            <div className="rounded-xl border border-border p-4">
+              <EChartsRenderer option={histChart.option} height={320} />
+            </div>
+          )}
+          {pieChart && (
+            <div className="rounded-xl border border-border p-4">
+              <EChartsRenderer option={pieChart.option} height={320} />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 中介效应路径图（SVG 渲染）
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface MediationPathOption {
+  nodes: { X: string; M: string; Y: string };
+  paths: {
+    a: { coef: number; p: number; label: string };
+    b: { coef: number; p: number; label: string };
+    c: { coef: number; p: number; label: string };
+    c_prime: { coef: number; p: number; label: string };
+  };
+  indirect?: number;
+  mediation_pct?: number | null;
+  ci?: [number, number];
+  ci_level?: number;
+}
+
+function MediationPathDiagram({ option }: { option: Record<string, unknown> }) {
+  const opt = option as unknown as MediationPathOption;
+  const { nodes, paths } = opt;
+  if (!nodes || !paths) return null;
+
+  const indirect = opt.indirect ?? 0;
+  const medPct = opt.mediation_pct;
+  const ci = opt.ci;
+  const ciPct = opt.ci_level ? `${Math.round(opt.ci_level * 100)}%` : "95%";
+
+  const svgW = 680;
+  const svgH = 310;
+  const bW = 120; const bH = 52;
+
+  // Box centers
+  const xC = { cx: 90, cy: 175 };
+  const mC = { cx: 340, cy: 50 };
+  const yC = { cx: 590, cy: 175 };
+
+  // Box corners
+  const xBox = { x: xC.cx - bW / 2, y: xC.cy - bH / 2 };
+  const mBox = { x: mC.cx - bW / 2, y: mC.cy - bH / 2 };
+  const yBox = { x: yC.cx - bW / 2, y: yC.cy - bH / 2 };
+
+  const sigColor = (p: number) => p < 0.05 ? "#5470c6" : "#9ca3af";
+  const sigDash  = (p: number) => p < 0.05 ? "none" : "6,3";
+  const sigWidth = (p: number) => p < 0.05 ? 2.5 : 1.5;
+
+  // Arrow X→M: from top-right of X to bottom-left of M
+  const aX1 = xC.cx + bW / 2 - 10; const aY1 = xC.cy - bH / 4;
+  const aX2 = mC.cx - bW / 2 + 10; const aY2 = mC.cy + bH / 4;
+  const aMidX = (aX1 + aX2) / 2 - 18; const aMidY = (aY1 + aY2) / 2 - 10;
+
+  // Arrow M→Y: from top-right of M to top-left of Y
+  const bX1 = mC.cx + bW / 2 - 10; const bY1 = mC.cy + bH / 4;
+  const bX2 = yC.cx - bW / 2 + 10; const bY2 = yC.cy - bH / 4;
+  const bMidX = (bX1 + bX2) / 2 + 18; const bMidY = (bY1 + bY2) / 2 - 10;
+
+  // Arrow X→Y (curved below): from right of X to left of Y
+  const cX1 = xC.cx + bW / 2; const cY1 = xC.cy + bH / 4;
+  const cX2 = yC.cx - bW / 2; const cY2 = yC.cy + bH / 4;
+  const cCurveY = 265; // control point y (below boxes)
+  const cPath = `M ${cX1} ${cY1} Q ${svgW / 2} ${cCurveY} ${cX2} ${cY2}`;
+
+  const truncate = (s: string, n = 10) => s.length > n ? s.slice(0, n) + "…" : s;
+
+  return (
+    <div className="overflow-x-auto">
+      <svg
+        viewBox={`0 0 ${svgW} ${svgH}`}
+        width="100%"
+        style={{ maxWidth: `${svgW}px`, display: "block", margin: "0 auto" }}
+      >
+        <defs>
+          <marker id="arr-sig" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#5470c6" />
+          </marker>
+          <marker id="arr-ns" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#9ca3af" />
+          </marker>
+        </defs>
+
+        {/* Arrow X→M (path a) */}
+        <line x1={aX1} y1={aY1} x2={aX2} y2={aY2}
+          stroke={sigColor(paths.a.p)} strokeWidth={sigWidth(paths.a.p)} strokeDasharray={sigDash(paths.a.p)}
+          markerEnd={paths.a.p < 0.05 ? "url(#arr-sig)" : "url(#arr-ns)"} />
+        <text x={aMidX} y={aMidY} textAnchor="middle" fontSize={11} fill={sigColor(paths.a.p)} fontWeight="600">
+          {paths.a.label}
+        </text>
+        <text x={aMidX} y={aMidY - 13} textAnchor="middle" fontSize={10} fill="#6b7280">路径 a</text>
+
+        {/* Arrow M→Y (path b) */}
+        <line x1={bX1} y1={bY1} x2={bX2} y2={bY2}
+          stroke={sigColor(paths.b.p)} strokeWidth={sigWidth(paths.b.p)} strokeDasharray={sigDash(paths.b.p)}
+          markerEnd={paths.b.p < 0.05 ? "url(#arr-sig)" : "url(#arr-ns)"} />
+        <text x={bMidX} y={bMidY} textAnchor="middle" fontSize={11} fill={sigColor(paths.b.p)} fontWeight="600">
+          {paths.b.label}
+        </text>
+        <text x={bMidX} y={bMidY - 13} textAnchor="middle" fontSize={10} fill="#6b7280">路径 b</text>
+
+        {/* Arrow X→Y curved (c / c') */}
+        <path d={cPath} fill="none"
+          stroke={sigColor(paths.c_prime.p)} strokeWidth={sigWidth(paths.c_prime.p)}
+          strokeDasharray={sigDash(paths.c_prime.p)}
+          markerEnd={paths.c_prime.p < 0.05 ? "url(#arr-sig)" : "url(#arr-ns)"} />
+        {/* direct effect label */}
+        <text x={svgW / 2} y={cCurveY + 14} textAnchor="middle" fontSize={11} fill={sigColor(paths.c_prime.p)} fontWeight="600">
+          直接 c&apos; = {paths.c_prime.label}
+        </text>
+        <text x={svgW / 2} y={cCurveY + 28} textAnchor="middle" fontSize={10} fill="#6b7280">
+          总效应 c = {paths.c.label}
+        </text>
+
+        {/* Box X */}
+        <rect x={xBox.x} y={xBox.y} width={bW} height={bH} rx={8}
+          fill="#eff6ff" stroke="#5470c6" strokeWidth={2} />
+        <text x={xC.cx} y={xC.cy - 8} textAnchor="middle" fontSize={11} fontWeight="700" fill="#1e40af">暴露变量</text>
+        <text x={xC.cx} y={xC.cy + 8} textAnchor="middle" fontSize={10} fill="#3b82f6">{truncate(nodes.X)}</text>
+
+        {/* Box M */}
+        <rect x={mBox.x} y={mBox.y} width={bW} height={bH} rx={8}
+          fill="#f0fdf4" stroke="#16a34a" strokeWidth={2} />
+        <text x={mC.cx} y={mC.cy - 8} textAnchor="middle" fontSize={11} fontWeight="700" fill="#166534">中介变量</text>
+        <text x={mC.cx} y={mC.cy + 8} textAnchor="middle" fontSize={10} fill="#16a34a">{truncate(nodes.M)}</text>
+
+        {/* Box Y */}
+        <rect x={yBox.x} y={yBox.y} width={bW} height={bH} rx={8}
+          fill="#fff1f2" stroke="#e11d48" strokeWidth={2} />
+        <text x={yC.cx} y={yC.cy - 8} textAnchor="middle" fontSize={11} fontWeight="700" fill="#9f1239">结局变量</text>
+        <text x={yC.cx} y={yC.cy + 8} textAnchor="middle" fontSize={10} fill="#e11d48">{truncate(nodes.Y)}</text>
+
+        {/* Indirect effect annotation */}
+        {medPct != null && (
+          <g>
+            <rect x={svgW / 2 - 130} y={96} width={260} height={42} rx={6}
+              fill="#f8fafc" stroke="#e2e8f0" strokeWidth={1} />
+            <text x={svgW / 2} y={114} textAnchor="middle" fontSize={11} fontWeight="700" fill="#5470c6">
+              间接效应 (a×b) = {indirect.toFixed(3)}
+            </text>
+            {ci && (
+              <text x={svgW / 2} y={130} textAnchor="middle" fontSize={10} fill="#6b7280">
+                BC {ciPct} CI = [{ci[0].toFixed(3)}, {ci[1].toFixed(3)}] · 中介比例 ≈ {medPct.toFixed(1)}%
+              </text>
+            )}
+          </g>
+        )}
+      </svg>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 样本量计算结果区域（突出显示核心数字）
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SampleSizeTables({ result }: { result: AnalysisResult }) {
+  const mainTable = result.tables[0]; // 样本量计算结果
+  const paramTable = result.tables[1]; // 输入参数
+  const formulaTable = result.tables[2]; // 公式
+
+  // 从结果表提取关键数字
+  const nPerGroup = mainTable?.rows.find((r) => String(r[0]).includes("每组"))
+  const nTotal    = mainTable?.rows.find((r) => String(r[0]).includes("总样本"))
+  const actualPw  = mainTable?.rows.find((r) => String(r[0]).includes("实际"))
+
+  return (
+    <div className="space-y-6">
+      {/* 突出显示卡片 */}
+      {(nPerGroup || nTotal) && (
+        <div className="rounded-xl border-2 border-primary/30 bg-primary/5 p-6">
+          <p className="text-sm font-medium text-muted-foreground mb-3">计算结果</p>
+          <div className="flex flex-wrap gap-8 items-end">
+            {nPerGroup && (
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">每组样本量</p>
+                <p className="text-5xl font-bold text-primary">{String(nPerGroup[1])}</p>
+                <p className="text-xs text-muted-foreground mt-1">人</p>
+              </div>
+            )}
+            {nTotal && (
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">总样本量</p>
+                <p className="text-4xl font-bold text-foreground">{String(nTotal[1])}</p>
+                <p className="text-xs text-muted-foreground mt-1">人</p>
+              </div>
+            )}
+            {actualPw && (
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">实际检验效能</p>
+                <p className="text-3xl font-bold text-green-600">{String(actualPw[1])}</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 完整结果表 */}
+      {mainTable && <ResultTable table={mainTable} />}
+
+      {/* 输入参数 */}
+      {paramTable && <ResultTable table={paramTable} />}
+
+      {/* 计算公式 */}
+      {formulaTable && (
+        <div className="space-y-2">
+          <h2 className="text-lg font-semibold">{formulaTable.title}</h2>
+          <div className="rounded-lg border border-border overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/40">
+                <tr>
+                  {formulaTable.headers.map((h) => (
+                    <th key={h} className="px-3 py-2.5 text-left font-semibold border-b-2 border-border">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {formulaTable.rows.map((row, i) => (
+                  <tr key={i} className="border-b border-border last:border-0">
+                    <td className="px-3 py-2.5 font-mono text-xs text-primary">{String(row[0])}</td>
+                    <td className="px-3 py-2.5 text-muted-foreground text-xs">{String(row[1])}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>

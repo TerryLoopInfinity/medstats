@@ -22,8 +22,8 @@ const METHODS: { value: AnalysisMethod; label: string; available: boolean }[] = 
   { value: "forest_plot",  label: "亚组分析 & 森林图",      available: true  },
   { value: "rcs",          label: "RCS 曲线",               available: true  },
   { value: "threshold",    label: "阈值效应分析",           available: true  },
-  { value: "mediation",    label: "中介分析",               available: false },
-  { value: "sample_size",  label: "样本量计算",             available: false },
+  { value: "mediation",    label: "中介分析",               available: true },
+  { value: "sample_size",  label: "样本量计算",             available: true },
 ];
 
 export default function AnalyzePage() {
@@ -157,6 +157,39 @@ export default function AnalyzePage() {
   const [mu, setMu] = useState<string>("0");
   const [alternative, setAlternative] = useState<"two-sided" | "less" | "greater">("two-sided");
 
+  // ── 中介分析 params ────────────────────────────────────────────
+  const [medExposure, setMedExposure] = useState<string>("");
+  const [medMediator, setMedMediator] = useState<string>("");
+  const [medOutcome, setMedOutcome] = useState<string>("");
+  const [medCovariates, setMedCovariates] = useState<string[]>([]);
+  const [medOutcomeType, setMedOutcomeType] = useState<"continuous" | "binary">("continuous");
+  const [medMediatorType, setMedMediatorType] = useState<"continuous" | "binary">("continuous");
+  const [medNBootstrap, setMedNBootstrap] = useState<string>("5000");
+
+  // ── 样本量计算 params ──────────────────────────────────────────
+  const [ssParams, setSsParams] = useState<Record<string, string>>({
+    calc_type: "two_means",
+    alpha: "0.05",
+    power: "0.80",
+    sides: "2",
+    solve_for: "sample_size",
+    n: "100",
+    mean_diff: "5",
+    sd: "10",
+    sd1: "10",
+    sd2: "10",
+    ratio: "1",
+    p1: "0.3",
+    p2: "0.5",
+    sd_diff: "10",
+    p0: "0.3",
+    r: "0.5",
+    or_value: "2.0",
+    r2: "0",
+    hr: "1.5",
+    event_rate: "0.3",
+  });
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -184,7 +217,7 @@ export default function AnalyzePage() {
 
   // ── 提交 ──────────────────────────────────────────────────────
   const handleSubmit = async () => {
-    if (!upload) return;
+    if (method !== "sample_size" && !upload) return;
     setError(null);
 
     let params: Record<string, unknown> = {};
@@ -401,11 +434,36 @@ export default function AnalyzePage() {
         if (isNaN(muNum)) { setError("请输入有效的假设均值 μ"); return; }
         params = { ...params, variables: hypoVars, mu: muNum, alternative };
       }
+    } else if (method === "mediation") {
+      if (!medExposure) { setError("请选择暴露变量"); return; }
+      if (!medMediator) { setError("请选择中介变量"); return; }
+      if (!medOutcome) { setError("请选择结局变量"); return; }
+      const nBoot = parseInt(medNBootstrap, 10);
+      params = {
+        exposure: medExposure,
+        mediator: medMediator,
+        outcome: medOutcome,
+        covariates: medCovariates,
+        outcome_type: medOutcomeType,
+        mediator_type: medMediatorType,
+        n_bootstrap: isNaN(nBoot) ? 5000 : Math.min(Math.max(nBoot, 100), 10000),
+      };
+    } else if (method === "sample_size") {
+      // 纯参数计算，无需文件
+      const numericKeys = ["alpha", "power", "sides", "n", "mean_diff", "sd", "sd1", "sd2",
+        "ratio", "p1", "p2", "sd_diff", "p0", "r", "or_value", "r2", "hr", "event_rate"];
+      params = { ...ssParams };
+      for (const k of numericKeys) {
+        if (ssParams[k] !== undefined && ssParams[k] !== "") {
+          params[k] = parseFloat(ssParams[k]);
+        }
+      }
     }
 
     setLoading(true);
     try {
-      const result = await analyze(method, upload.file_id, params);
+      const fileId = method === "sample_size" ? "" : upload!.file_id;
+      const result = await analyze(method, fileId, params);
       localStorage.setItem("ms_result", JSON.stringify(result));
       router.push("/result");
     } catch (e) {
@@ -416,7 +474,10 @@ export default function AnalyzePage() {
   };
 
   const canSubmit = (() => {
-    if (!upload || loading) return false;
+    if (loading) return false;
+    if (method === "sample_size") return true; // 无需文件，参数有默认值
+    if (!upload) return false;
+    if (method === "mediation") return !!medExposure && !!medMediator && !!medOutcome;
     if (method === "descriptive") return selected.length > 0;
     if (method === "table_one")
       return !!groupVar && (continuousVars.length > 0 || categoricalVars.length > 0);
@@ -456,17 +517,51 @@ export default function AnalyzePage() {
     return false;
   })();
 
+  // ── 样本量计算：独立渲染路径，无需上传文件 ────────────────────────
+  if (method === "sample_size") {
+    return (
+      <div className="max-w-4xl mx-auto px-4 py-10 space-y-8">
+        <div>
+          <h1 className="text-2xl font-bold">在线样本量计算</h1>
+          <p className="text-sm text-muted-foreground mt-1">无需上传数据文件，直接输入参数计算</p>
+        </div>
+        <section className="space-y-3">
+          <h2 className="font-semibold">选择分析方法</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {METHODS.map(({ value, label, available }) => (
+              <label key={value} className={`flex items-center gap-3 px-4 py-3 rounded-lg border cursor-pointer transition-colors ${!available ? "opacity-40 cursor-not-allowed border-border" : method === value ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"}`}>
+                <input type="radio" name="method2" value={value} checked={method === value} disabled={!available} onChange={() => handleMethodChange(value)} className="accent-primary" />
+                <span className="text-sm">{label}</span>
+                {!available && <span className="ml-auto text-xs text-muted-foreground">开发中</span>}
+              </label>
+            ))}
+          </div>
+        </section>
+        <SampleSizeConfig params={ssParams} setParams={setSsParams} />
+        {error && <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">{error}</div>}
+        <div className="flex gap-3 justify-end">
+          <button onClick={handleSubmit} disabled={loading}
+            className="px-5 py-2 bg-primary text-primary-foreground rounded-lg font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
+            {loading && <Spinner />}
+            {loading ? "计算中…" : "开始计算"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (!upload) {
     return (
       <div className="max-w-4xl mx-auto px-4 py-10">
         <div className="rounded-xl border border-border p-8 text-center space-y-3">
           <p className="text-muted-foreground">尚未上传数据文件</p>
-          <a
-            href="/upload"
-            className="inline-block px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:opacity-90"
-          >
+          <a href="/upload" className="inline-block px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:opacity-90">
             去上传数据
           </a>
+          <p className="text-xs text-muted-foreground">
+            样本量计算无需上传文件，
+            <button onClick={() => handleMethodChange("sample_size")} className="text-primary underline">直接进入</button>
+          </p>
         </div>
       </div>
     );
@@ -806,6 +901,24 @@ export default function AnalyzePage() {
           setExposure={(v) => { setThrExposure(v); setThrCovariates((c) => c.filter((x) => x !== v)); }}
           covariates={thrCovariates}
           setCovariates={setThrCovariates}
+        />
+      ) : method === "mediation" ? (
+        <MediationConfig
+          upload={upload}
+          exposure={medExposure}
+          setExposure={(v) => { setMedExposure(v); setMedCovariates((c) => c.filter((x) => x !== v)); if (medMediator === v) setMedMediator(""); if (medOutcome === v) setMedOutcome(""); }}
+          mediator={medMediator}
+          setMediator={(v) => { setMedMediator(v); setMedCovariates((c) => c.filter((x) => x !== v)); if (medExposure === v) setMedExposure(""); if (medOutcome === v) setMedOutcome(""); }}
+          outcome={medOutcome}
+          setOutcome={(v) => { setMedOutcome(v); setMedCovariates((c) => c.filter((x) => x !== v)); if (medExposure === v) setMedExposure(""); if (medMediator === v) setMedMediator(""); }}
+          covariates={medCovariates}
+          setCovariates={setMedCovariates}
+          outcomeType={medOutcomeType}
+          setOutcomeType={setMedOutcomeType}
+          mediatorType={medMediatorType}
+          setMediatorType={setMedMediatorType}
+          nBootstrap={medNBootstrap}
+          setNBootstrap={setMedNBootstrap}
         />
       ) : (
         /* 通用变量选择器（descriptive 及未来方法） */
@@ -3300,6 +3413,307 @@ function ThresholdConfig({
           {covariates.length > 0 && <p>协变量：<span className="font-medium text-foreground">{covariates.join("、")}</span></p>}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 中介分析配置组件
+// ─────────────────────────────────────────────────────────────────────────────
+
+function MedSingleSelect({
+  label, hint, name, value, onChange, exclude, cols,
+}: {
+  label: string; hint?: string; name: string; value: string;
+  onChange: (v: string) => void; exclude?: string[]; cols: string[];
+}) {
+  return (
+    <section className="space-y-2">
+      <div>
+        <h2 className="font-semibold text-sm">
+          {label} <span className="text-destructive text-xs font-normal">必选</span>
+        </h2>
+        {hint && <p className="text-xs text-muted-foreground mt-0.5">{hint}</p>}
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+        {cols.filter((c) => !(exclude ?? []).includes(c)).map((col) => (
+          <label key={col} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${value === col ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"}`}>
+            <input type="radio" name={name} value={col} checked={value === col} onChange={() => onChange(col)} className="accent-primary" />
+            <span className="truncate" title={col}>{col}</span>
+          </label>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+interface MediationConfigProps {
+  upload: UploadResponse;
+  exposure: string; setExposure: (v: string) => void;
+  mediator: string; setMediator: (v: string) => void;
+  outcome: string;  setOutcome:  (v: string) => void;
+  covariates: string[]; setCovariates: React.Dispatch<React.SetStateAction<string[]>>;
+  outcomeType: "continuous" | "binary";   setOutcomeType:   (v: "continuous" | "binary") => void;
+  mediatorType: "continuous" | "binary";  setMediatorType:  (v: "continuous" | "binary") => void;
+  nBootstrap: string; setNBootstrap: (v: string) => void;
+}
+
+function MediationConfig({
+  upload, exposure, setExposure, mediator, setMediator,
+  outcome, setOutcome, covariates, setCovariates,
+  outcomeType, setOutcomeType, mediatorType, setMediatorType,
+  nBootstrap, setNBootstrap,
+}: MediationConfigProps) {
+  const cols = upload.column_names;
+  const toggleCov = (col: string) =>
+    setCovariates((prev) => prev.includes(col) ? prev.filter((c) => c !== col) : [...prev, col]);
+
+  return (
+    <div className="space-y-6">
+      <MedSingleSelect
+        label="暴露变量（X）"
+        hint="影响中介变量和结局变量的自变量"
+        name="med_exposure"
+        value={exposure}
+        onChange={setExposure}
+        exclude={[mediator, outcome, ...covariates]}
+        cols={cols}
+      />
+      <MedSingleSelect
+        label="中介变量（M）"
+        hint="传导暴露变量对结局影响的变量"
+        name="med_mediator"
+        value={mediator}
+        onChange={setMediator}
+        exclude={[exposure, outcome, ...covariates]}
+        cols={cols}
+      />
+      <MedSingleSelect
+        label="结局变量（Y）"
+        hint="最终感兴趣的因变量"
+        name="med_outcome"
+        value={outcome}
+        onChange={setOutcome}
+        exclude={[exposure, mediator, ...covariates]}
+        cols={cols}
+      />
+
+      {/* 协变量 */}
+      <section className="space-y-2">
+        <div>
+          <h2 className="font-semibold text-sm">协变量（可选）</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">控制混杂偏倚，纳入所有路径回归模型</p>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+          {cols.filter((c) => c !== exposure && c !== mediator && c !== outcome).map((col) => (
+            <label key={col} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${covariates.includes(col) ? "border-amber-500 bg-amber-50 dark:bg-amber-950/20 font-medium" : "border-border hover:border-amber-400/60"}`}>
+              <input type="checkbox" checked={covariates.includes(col)} onChange={() => toggleCov(col)} className="accent-amber-500" />
+              <span className="truncate" title={col}>{col}</span>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      {/* 变量类型 */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <section className="space-y-2">
+          <h2 className="font-semibold text-sm">结局变量类型</h2>
+          <div className="flex gap-3">
+            {([["continuous", "连续变量"], ["binary", "二元变量"]] as const).map(([val, lbl]) => (
+              <label key={val} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer ${outcomeType === val ? "border-primary bg-primary/5 font-medium" : "border-border"}`}>
+                <input type="radio" name="med_outcome_type" value={val} checked={outcomeType === val} onChange={() => setOutcomeType(val)} className="accent-primary" />
+                {lbl}
+              </label>
+            ))}
+          </div>
+          {outcomeType === "binary" && <p className="text-xs text-amber-600">二元结局使用 Logistic 回归，效应量为 log-OR</p>}
+        </section>
+        <section className="space-y-2">
+          <h2 className="font-semibold text-sm">中介变量类型</h2>
+          <div className="flex gap-3">
+            {([["continuous", "连续变量"], ["binary", "二元变量"]] as const).map(([val, lbl]) => (
+              <label key={val} className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer ${mediatorType === val ? "border-primary bg-primary/5 font-medium" : "border-border"}`}>
+                <input type="radio" name="med_mediator_type" value={val} checked={mediatorType === val} onChange={() => setMediatorType(val)} className="accent-primary" />
+                {lbl}
+              </label>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      {/* Bootstrap 次数 */}
+      <section className="space-y-2">
+        <h2 className="font-semibold text-sm">Bootstrap 次数</h2>
+        <input
+          type="number"
+          min={100}
+          max={10000}
+          step={100}
+          value={nBootstrap}
+          onChange={(e) => setNBootstrap(e.target.value)}
+          className="w-40 rounded-lg border border-border px-3 py-2 text-sm bg-background"
+        />
+        <p className="text-xs text-muted-foreground">推荐 5000（默认），最少 500，增大次数提升 CI 精度但耗时更长</p>
+      </section>
+
+      {/* 摘要 */}
+      {exposure && mediator && outcome && (
+        <div className="rounded-lg bg-muted/40 border border-border px-4 py-3 text-xs text-muted-foreground space-y-1">
+          <p>路径：<span className="font-medium text-foreground">{exposure} → {mediator} → {outcome}</span></p>
+          {covariates.length > 0 && <p>协变量：<span className="font-medium text-foreground">{covariates.join("、")}</span></p>}
+          <p>Bootstrap 次数：<span className="font-medium text-foreground">{nBootstrap}</span></p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 样本量计算配置组件（无需上传文件）
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SsNumberInput({
+  label, k, hint, step = "any", min, max, params, onSet,
+}: {
+  label: string; k: string; hint?: string; step?: string; min?: string; max?: string;
+  params: Record<string, string>; onSet: (k: string, v: string) => void;
+}) {
+  return (
+    <div className="space-y-1">
+      <label className="text-xs font-medium text-foreground">{label}</label>
+      <input
+        type="number"
+        step={step}
+        min={min}
+        max={max}
+        value={params[k] ?? ""}
+        onChange={(e) => onSet(k, e.target.value)}
+        className="w-full rounded-lg border border-border px-3 py-2 text-sm bg-background"
+      />
+      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+    </div>
+  );
+}
+
+function SampleSizeConfig({
+  params,
+  setParams,
+}: {
+  params: Record<string, string>;
+  setParams: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+}) {
+  const set = (key: string, val: string) =>
+    setParams((prev) => ({ ...prev, [key]: val }));
+
+  const calcType = params.calc_type ?? "two_means";
+  const solveFor = params.solve_for ?? "sample_size";
+
+  const CALC_TYPES = [
+    { value: "two_means",        label: "两组均值比较（独立 t 检验）" },
+    { value: "two_proportions",  label: "两组率比较" },
+    { value: "paired_means",     label: "配对均值比较（配对 t 检验）" },
+    { value: "one_mean",         label: "单样本均值检验" },
+    { value: "one_proportion",   label: "单样本率检验" },
+    { value: "correlation",      label: "相关系数检验" },
+    { value: "logistic",         label: "Logistic 回归" },
+    { value: "cox",              label: "Cox 回归 / 生存分析" },
+  ];
+
+  return (
+    <div className="space-y-6">
+      {/* 计算类型 */}
+      <section className="space-y-3">
+        <h2 className="font-semibold">计算类型</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {CALC_TYPES.map(({ value, label }) => (
+            <label key={value} className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-sm cursor-pointer transition-colors ${calcType === value ? "border-primary bg-primary/5 font-medium" : "border-border hover:border-primary/40"}`}>
+              <input type="radio" name="ss_calc_type" value={value} checked={calcType === value} onChange={() => set("calc_type", value)} className="accent-primary" />
+              {label}
+            </label>
+          ))}
+        </div>
+      </section>
+
+      {/* 通用参数 */}
+      <section className="space-y-3">
+        <h2 className="font-semibold">通用参数</h2>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <SsNumberInput params={params} onSet={set}label="显著性水平 α" k="alpha" hint="常用 0.05" step="0.01" min="0.001" max="0.2" />
+          <SsNumberInput params={params} onSet={set}label="目标效能 Power" k="power" hint="常用 0.80" step="0.01" min="0.5" max="0.99" />
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-foreground">检验方向</label>
+            <select value={params.sides ?? "2"} onChange={(e) => set("sides", e.target.value)}
+              className="w-full rounded-lg border border-border px-3 py-2 text-sm bg-background">
+              <option value="2">双侧</option>
+              <option value="1">单侧</option>
+            </select>
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-foreground">计算目标</label>
+            <select value={solveFor} onChange={(e) => set("solve_for", e.target.value)}
+              className="w-full rounded-lg border border-border px-3 py-2 text-sm bg-background">
+              <option value="sample_size">计算样本量</option>
+              <option value="power">计算 Power</option>
+            </select>
+          </div>
+        </div>
+        {solveFor === "power" && (
+          <SsNumberInput params={params} onSet={set}label="已知每组样本量 n" k="n" hint="给定样本量，计算对应的检验效能" step="1" min="2" />
+        )}
+      </section>
+
+      {/* 类型特定参数 */}
+      <section className="space-y-3">
+        <h2 className="font-semibold">效应量参数</h2>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+          {/* two_means / paired_means / one_mean */}
+          {["two_means", "paired_means", "one_mean"].includes(calcType) && (
+            <SsNumberInput params={params} onSet={set}label="均值差 (Δ)" k="mean_diff" hint="两组均值之差" />
+          )}
+          {calcType === "two_means" && (<>
+            <SsNumberInput params={params} onSet={set}label="标准差 SD" k="sd" hint="两组共用标准差（也可分别设 sd1, sd2）" />
+            <SsNumberInput params={params} onSet={set}label="样本量比 (n₂/n₁)" k="ratio" hint="默认 1:1 等比" step="0.1" min="0.1" />
+          </>)}
+          {calcType === "paired_means" && (
+            <SsNumberInput params={params} onSet={set}label="配对差值 SD" k="sd_diff" hint="差值的标准差" />
+          )}
+          {calcType === "one_mean" && (
+            <SsNumberInput params={params} onSet={set}label="标准差 SD" k="sd" />
+          )}
+          {/* two_proportions */}
+          {calcType === "two_proportions" && (<>
+            <SsNumberInput params={params} onSet={set}label="组 1 率 p₁" k="p1" hint="(0~1)" step="0.01" min="0.01" max="0.99" />
+            <SsNumberInput params={params} onSet={set}label="组 2 率 p₂" k="p2" hint="(0~1)" step="0.01" min="0.01" max="0.99" />
+            <SsNumberInput params={params} onSet={set}label="样本量比 (n₂/n₁)" k="ratio" hint="默认 1:1" step="0.1" min="0.1" />
+          </>)}
+          {/* one_proportion */}
+          {calcType === "one_proportion" && (<>
+            <SsNumberInput params={params} onSet={set}label="零假设率 p₀" k="p0" hint="原假设下的率" step="0.01" min="0.01" max="0.99" />
+            <SsNumberInput params={params} onSet={set}label="预期率 p₁" k="p1" hint="备择假设下的率" step="0.01" min="0.01" max="0.99" />
+          </>)}
+          {/* correlation */}
+          {calcType === "correlation" && (
+            <SsNumberInput params={params} onSet={set}label="相关系数 r" k="r" hint="预期相关系数（-1~1，不含 0）" step="0.05" min="-0.99" max="0.99" />
+          )}
+          {/* logistic */}
+          {calcType === "logistic" && (<>
+            <SsNumberInput params={params} onSet={set}label="基线事件率 p₀" k="p0" hint="暴露=0 时的结局率" step="0.01" min="0.01" max="0.99" />
+            <SsNumberInput params={params} onSet={set}label="预期 OR 值" k="or_value" hint="暴露变量的优势比" step="0.1" min="0.01" />
+            <SsNumberInput params={params} onSet={set}label="协变量 R²" k="r2" hint="其他协变量解释的方差（0~1）" step="0.01" min="0" max="0.99" />
+          </>)}
+          {/* cox */}
+          {calcType === "cox" && (<>
+            <SsNumberInput params={params} onSet={set}label="预期 HR" k="hr" hint="风险比（≠ 1）" step="0.1" min="0.01" />
+            <SsNumberInput params={params} onSet={set}label="事件率" k="event_rate" hint="随访期总事件发生率（0~1）" step="0.01" min="0.01" max="1" />
+            <SsNumberInput params={params} onSet={set}label="协变量 R²" k="r2" hint="其他协变量解释的方差（0~1）" step="0.01" min="0" max="0.99" />
+          </>)}
+        </div>
+      </section>
+
+      <div className="rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 px-4 py-3 text-xs text-blue-700 dark:text-blue-300">
+        <p className="font-medium">ℹ 样本量计算无需上传数据文件</p>
+        <p className="mt-0.5">结果页将展示功效曲线（Power Curve）和计算公式说明。</p>
+      </div>
     </div>
   );
 }
