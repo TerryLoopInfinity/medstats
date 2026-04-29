@@ -11,9 +11,11 @@ from app.api.routes import (
     linear_reg_adjusted,
     logistic_reg,
     logistic_reg_adjusted,
+    mediation,
     prediction,
     psm,
     rcs,
+    sample_size,
     survival,
     table_one,
     threshold,
@@ -38,3 +40,5 @@ router.include_router(prediction.router, prefix="/prediction")
 router.include_router(forest_plot.router, prefix="/forest_plot")
 router.include_router(rcs.router, prefix="/rcs")
 router.include_router(threshold.router, prefix="/threshold")
+router.include_router(mediation.router, prefix="/mediation")
+router.include_router(sample_size.router, prefix="/sample_size")
